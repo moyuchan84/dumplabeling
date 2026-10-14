@@ -1,0 +1,58 @@
+# scanlabel
+
+dump 기록(스캔 한 건)에 **대분류 › 중분류 › 소분류 라벨**을 붙이고, 화면에 띄운 기록과 **모양이 닮은
+라벨된 기록**을 찾아 그 라벨을 단계별로 제안하는 서비스입니다.
+
+- fleet(ftpmodule)의 공개 HTTP API 를 **캐시로만** 읽습니다 — FTP 를 일으키지 않고, fleet DB 를 읽지 않습니다.
+- 화면은 poc_viewer 의 Dump → 「사례」 패널 → 「이 기록 라벨」 탭입니다.
+- 규칙과 결정: `SPEC.md` · 호출 계약: `README.api.md` · 작업 규칙: `CLAUDE.md`.
+
+## 실행 (이 PC)
+
+```powershell
+.\.local\pg.ps1 start                                   # 워크스페이스 루트 — PostgreSQL 16, 포트 5433
+cd scanlabel
+python -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt
+$env:SCANLABEL_DB_DSN = 'postgresql://postgres@127.0.0.1:5433/scanlabel'
+$env:FLEET_API_URL    = 'http://localhost:8787'        # 목(poc_viewer npm run mock) 또는 fleet 8000
+$env:PYTHONUTF8 = '1'
+.\.venv\Scripts\python -m scanlabel.migrate up
+.\.venv\Scripts\python -m scanlabel.jobs seed-labels labels.seed.example.json   # 임시 트리
+.\.venv\Scripts\python -m uvicorn scanlabel.api:app --port 8100
+```
+
+DB 가 없으면 한 번 만듭니다: `psql -h 127.0.0.1 -p 5433 -U postgres -c "CREATE DATABASE scanlabel"`.
+VS Code 에서는 워크스페이스의 `scanlabel API (8100)` 구성(또는 compound 「풀스택」)으로 띄웁니다.
+
+## 라벨 트리 넣기
+
+실제 분류표는 엑셀에서 CSV(UTF-8)로 저장해 넣으면 됩니다. 열은 아래 순서이고, 머리 행은 있어도 됩니다.
+
+```csv
+대분류,중분류,소분류,코드,설명,사례번호
+신호 이상,피크,단일 피크,A-01-1,한 자리에서만 튄다,7
+신호 이상,레벨 저하,,A-02,,
+```
+
+- 소분류를 비우면 중분류에서 끝나는 가지가 됩니다. 코드 · 설명 · 사례번호는 그 행의 **가장 깊은** 노드에 붙습니다.
+- 여러 번 넣어도 됩니다(멱등) — 이미 있는 노드는 그대로 쓰고 빈 코드 · 설명 · 사례만 채웁니다.
+- `사례번호` 는 fleet `acs_case.case_id` 입니다.
+
+## 측정
+
+```powershell
+.\.venv\Scripts\python -m scanlabel.jobs eval            # leave-one-out 단계별 적중률
+.\.venv\Scripts\python -m scanlabel.jobs refeature       # FEATURE_VERSION 이 바뀐 뒤
+```
+
+라벨이 수십 건 쌓이면 `eval` 로 「닮은 모양 = 같은 원인」이 실제로 맞는지부터 확인합니다. 문턱값 · 가중치는
+`scanlabel/shape.py` 의 상수 한 곳에만 있습니다.
+
+## 테스트
+
+```powershell
+$env:SCANLABEL_TEST_DSN = 'postgresql://postgres@127.0.0.1:5433/scanlabel_test'
+.\.venv\Scripts\python -m pytest
+```
+
+실제 PostgreSQL 이 필요하고, DSN 이 없으면 조용히 건너뛰지 않고 실패합니다. fleet 은 `httpx.MockTransport` 로 흉내 냅니다.

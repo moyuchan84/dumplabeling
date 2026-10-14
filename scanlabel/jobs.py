@@ -1,0 +1,161 @@
+"""CLI — `python -m scanlabel.jobs {seed-labels,eval,refeature}`.
+
+- `seed-labels FILE` — 대 › 중 › 소 라벨 트리를 넣는다(JSON 또는 CSV). **멱등**: 같은 부모 아래
+  같은 이름이 이미 있으면 그 노드를 쓰고(코드 · 설명 · 사례가 비어 있으면 채운다), 없는 것만 만든다.
+- `eval` — leave-one-out 단계별 적중률 (SPEC.md 「측정」). 스냅샷만 쓰므로 fleet 이 필요 없다.
+- `refeature` — `FEATURE_VERSION` 이 다른 라벨의 특징을 fleet 캐시에서 다시 만든다. 그 세대가
+  fleet 에 없으면 `stale` 로 보고하고 건너뛴다.
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Iterator, Optional
+
+from . import shape
+from .fleet_client import Fleet, FleetError, FleetUnavailable, NotCached
+from .store import Store
+from .tree import LEVEL_NAMES
+
+
+def _iter_json(nodes: list, parents: tuple = ()) -> Iterator[tuple[tuple, dict]]:
+    """[{name, code?, description?, case_id?, children: [...]}] → (조상 이름들, 노드)."""
+    for n in nodes:
+        yield parents, n
+        yield from _iter_json(n.get("children") or [], parents + (n["name"],))
+
+
+def _iter_csv(path: Path) -> Iterator[tuple[tuple, dict]]:
+    """열: 대분류, 중분류, 소분류[, 코드, 설명, 사례번호] — 비운 칸 아래는 만들지 않는다.
+
+    코드 · 설명 · 사례번호는 그 행의 **가장 깊은** 노드에 붙는다. 같은 대분류가 여러 행에
+    나와도 한 번만 만들어진다.
+    """
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.reader(fh))
+    if rows and rows[0] and rows[0][0].strip() in ("대분류", "level1", "l1"):
+        rows = rows[1:]
+    for r in rows:
+        r = [c.strip() for c in r] + [""] * 6
+        names = [n for n in r[:3]]
+        depth = 0
+        while depth < 3 and names[depth]:
+            depth += 1
+        for d in range(depth):
+            node = {"name": names[d]}
+            if d == depth - 1:
+                node.update(code=r[3], description=r[4], case_id=int(r[5]) if r[5] else None)
+            yield tuple(names[:d]), node
+
+
+def seed_labels(store: Store, path: Path) -> dict:
+    if path.suffix.lower() == ".csv":
+        items = list(_iter_csv(path))
+    else:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        items = list(_iter_json(data["labels"] if isinstance(data, dict) else data))
+    ids: dict[tuple, int] = {}
+    made = kept = 0
+    for order, (parents, node) in enumerate(items):
+        parent_id = ids[parents] if parents else None
+        key = parents + (node["name"],)
+        if key in ids:
+            continue
+        found = store.find_child(parent_id, node["name"])
+        if found:
+            ids[key] = int(found["id"])
+            fill = {k: node[k] for k in ("code", "description", "case_id")
+                    if node.get(k) and not found.get(k)}
+            if fill:
+                store.update_def(int(found["id"]), fill)
+            kept += 1
+            continue
+        row = store.create_def(parent_id=parent_id, name=node["name"], code=node.get("code") or "",
+                               description=node.get("description") or "",
+                               case_id=node.get("case_id"), origin="seed", sort_no=order)
+        ids[key] = int(row["id"])
+        made += 1
+    return {"created": made, "existing": kept}
+
+
+def run_eval(store: Store, *, set_name: str, same_scan_only: bool) -> dict:
+    labelled = store.candidates(set_name=set_name)
+    return {"labelled": len(labelled),
+            "levels": shape.evaluate(labelled, store.tree(), same_scan_only=same_scan_only)}
+
+
+def refeature(store: Store, fleet: Fleet, *, set_name: str) -> dict:
+    done, stale = 0, []
+    for c in store.candidates(set_name=set_name):
+        if c["feature_version"] == shape.FEATURE_VERSION:
+            continue
+        try:
+            f = fleet.load_file(int(c["server_id"]), set_name, c["name"])
+            scan = f.find(c["source"])
+        except (NotCached, KeyError, FleetError) as exc:
+            stale.append({"id": c["id"], "name": c["name"], "source": c["source"], "why": str(exc)})
+            continue
+        store.set_features(int(c["id"]), shape.record_features(scan.scan), shape.FEATURE_VERSION)
+        done += 1
+    return {"refeatured": done, "stale": stale}
+
+
+def _print_eval(res: dict) -> None:
+    print(f"라벨된 기록 {res['labelled']}건 — leave-one-out")
+    print(f"  {'단계':<6} {'n':>4} {'top-1':>8} {'top-3':>8} {'제안':>6} {'제안 적중':>9}")
+    for level, o in res["levels"].items():
+        n = o["n"]
+
+        def pct(x: int, d: int) -> str:
+            return f"{x / d * 100:5.1f}%" if d else "    -"
+        print(f"  {LEVEL_NAMES[level]:<6} {n:>4} {pct(o['top1'], n):>8} {pct(o['top3'], n):>8}"
+              f" {o['suggested']:>6} {pct(o['suggested_right'], o['suggested']):>9}")
+
+
+def _main(argv: Optional[list[str]] = None) -> int:
+    ap = argparse.ArgumentParser(prog="python -m scanlabel.jobs")
+    ap.add_argument("--dsn", default=None, help="기본은 $SCANLABEL_DB_DSN")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("seed-labels", help="라벨 트리 넣기 (JSON | CSV, 멱등)")
+    p.add_argument("file", type=Path)
+    p = sub.add_parser("eval", help="leave-one-out 단계별 적중률")
+    p.add_argument("--set-name", default="dump")
+    p.add_argument("--all-scans", action="store_true", help="스캔 종류가 달라도 비교")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("refeature", help="FEATURE_VERSION 이 다른 라벨의 특징 다시 만들기")
+    p.add_argument("--set-name", default="dump")
+    p.add_argument("--fleet-url", default=os.environ.get("FLEET_API_URL", "http://localhost:8000"))
+    args = ap.parse_args(argv)
+
+    dsn = args.dsn or os.environ.get("SCANLABEL_DB_DSN", "")
+    if not dsn:
+        print("error: SCANLABEL_DB_DSN 이 필요하다")
+        return 2
+    store = Store(dsn)
+    try:
+        if args.cmd == "seed-labels":
+            print(json.dumps(seed_labels(store, args.file), ensure_ascii=False))
+        elif args.cmd == "eval":
+            res = run_eval(store, set_name=args.set_name, same_scan_only=not args.all_scans)
+            print(json.dumps(res, ensure_ascii=False, indent=2)) if args.json else _print_eval(res)
+        else:
+            fleet = Fleet(args.fleet_url)
+            try:
+                print(json.dumps(refeature(store, fleet, set_name=args.set_name),
+                                 ensure_ascii=False, indent=2))
+            except FleetUnavailable as exc:
+                print(f"error: {exc}")
+                return 2
+            finally:
+                fleet.close()
+        return 0
+    finally:
+        store.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main(sys.argv[1:]))

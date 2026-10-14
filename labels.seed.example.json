@@ -1,0 +1,22 @@
+{
+  "_note": "개발용 임시 트리 — 실제 분류가 아니다. 실제 대·중·소 분류표를 받으면 이 파일 대신 그것을 넣는다 (python -m scanlabel.jobs seed-labels <파일>). 사례번호(case_id)는 fleet acs_case.case_id.",
+  "labels": [
+    { "name": "신호 이상", "code": "A", "description": "검출 신호의 모양이 기대와 다르다", "children": [
+      { "name": "피크", "code": "A-01", "description": "국소적으로 튀는 값", "children": [
+        { "name": "단일 피크", "code": "A-01-1", "description": "한 자리에서만 튄다", "case_id": 1 },
+        { "name": "이중 피크", "code": "A-01-2", "description": "두 자리에서 튄다" }
+      ]},
+      { "name": "레벨 저하", "code": "A-02", "description": "전체나 일부의 신호 크기가 낮다", "children": [
+        { "name": "가장자리 저하", "code": "A-02-1", "description": "스캔 끝 쪽만 낮아진다", "case_id": 2 }
+      ]}
+    ]},
+    { "name": "위치 이상", "code": "B", "description": "신호가 기대한 자리에 있지 않다", "children": [
+      { "name": "중심 이탈", "code": "B-01", "children": [
+        { "name": "X 방향 이탈", "code": "B-01-1" }
+      ]}
+    ]},
+    { "name": "데이터 이상", "code": "C", "description": "측정이 아니라 데이터 자체의 문제", "children": [
+      { "name": "결측 · 잘림", "code": "C-01", "description": "값이 빠지거나 배열이 잘렸다" }
+    ]}
+  ]
+}
