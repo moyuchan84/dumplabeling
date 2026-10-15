@@ -1,6 +1,8 @@
 """기록 풀 · 묶음 · 유사 사례 — HTTP 왕복 (SPEC.md 「기록 풀」·「묶음」·「유사 사례」)."""
 from __future__ import annotations
 
+import time
+
 import httpx
 
 from scanlabel.fleet_client import Fleet
@@ -22,6 +24,20 @@ def put_files(fleet, server_id, prefix, fn, n, **kw):
     return names
 
 
+def rerun(client) -> dict:
+    """다시 묶기는 뒤에서 돈다(202) — 끝날 때까지 목록을 다시 읽고 그 응답을 돌려준다."""
+    r = client.post("/clusters/run", json={})
+    assert r.status_code == 202 and r.json()["job"]["state"] in ("running", "done")
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        res = client.get("/clusters").json()
+        if res["job"] and res["job"]["state"] != "running":
+            assert res["job"]["state"] == "done", res["job"]
+            return res
+        time.sleep(0.05)
+    raise AssertionError("다시 묶기가 끝나지 않았다")
+
+
 def open_file(client, server_id, name):
     r = client.post("/labels/similar", json={"server_id": server_id, "name": name})
     assert r.status_code == 200, r.text
@@ -31,7 +47,7 @@ def test_opening_a_file_and_labelling_put_records_in_the_pool(client, dsn, fleet
     ids = seed(dsn)
     fleet.put(1, "a.tdf", file_of(synth.scan(synth.peak(), source="a::1"), synth.scan(synth.ramp(), source="a::2")))
     fleet.put(1, "b.tdf", file_of(synth.scan(synth.peak(), source="b::1")))
-    assert client.get("/clusters").json() == {"run": None, "pool": 0, "clusters": []}
+    assert client.get("/clusters").json() == {"run": None, "pool": 0, "clusters": [], "job": None}
     open_file(client, 1, "a.tdf")                               # 파일을 연다 → 두 기록이 풀에
     label(client, 1, "b.tdf", "b::1", ids["단일 피크"])          # 라벨 저장 → 그 기록이 풀에
     assert client.get("/clusters").json()["pool"] == 3
@@ -50,9 +66,7 @@ def test_clusters_group_unlabelled_records_and_read_the_labelled_members(client,
     label(client, 1, peaks[0], f"{peaks[0]}::a", ids["단일 피크"])
     label(client, 1, peaks[1], f"{peaks[1]}::a", ids["단일 피크"])
 
-    r = client.post("/clusters/run", json={})
-    assert r.status_code == 200, r.text
-    res = r.json()
+    res = rerun(client)
     assert res["run"]["clusters"] == 2 and res["run"]["unclustered"] == 1 and res["run"]["stale"] is False
     first, second = res["clusters"]
     assert first["size"] == 4 and first["labelled"] == 2 and first["unlabelled"] == 2
@@ -85,7 +99,7 @@ def test_a_cluster_label_is_applied_to_its_unlabelled_members_at_once(client, ds
     for n in edges:
         open_file(client, 2, n)
     label(client, 2, edges[0], f"{edges[0]}::a", ids["레벨 저하"])
-    run = client.post("/clusters/run", json={}).json()
+    run = rerun(client)
     no, run_id = run["clusters"][0]["cluster_no"], run["run"]["id"]
     calls_before = len(fleet.calls)
 
@@ -100,7 +114,7 @@ def test_a_cluster_label_is_applied_to_its_unlabelled_members_at_once(client, ds
     # 조상 + 자손을 함께 주면 하나도 쓰지 않고 422, 다시 묶인 뒤의 옛 run_id 도 422
     bad = client.post(f"/clusters/{no}/apply", json={"run_id": run_id, "label_ids": [ids["피크"], ids["단일 피크"]]})
     assert bad.status_code == 422
-    client.post("/clusters/run", json={})
+    rerun(client)
     old = client.post(f"/clusters/{no}/apply", json={"run_id": run_id, "label_ids": [ids["가장자리 저하"]]})
     assert old.status_code == 422 and "다시" in old.json()["detail"]
     assert client.get("/clusters/99", params={"run_id": run_id + 1}).status_code == 404
@@ -151,3 +165,59 @@ def test_index_follows_the_generation_cursor_without_ftp(dsn, fleet):
     finally:
         client.close()
         store.close()
+
+
+def test_rerun_returns_at_once_and_reports_its_state(client, dsn, fleet):
+    seed(dsn)
+    for n in put_files(fleet, 1, "p", synth.peak(), 3):
+        open_file(client, 1, n)
+    first = client.post("/clusters/run", json={})
+    assert first.status_code == 202                               # 끝나기를 기다리지 않는다
+    res = rerun(client)                                           # 돌고 있으면 그 상태를, 끝나면 결과를
+    assert res["job"]["state"] == "done" and res["run"]["clusters"] == 1
+
+
+def test_the_map_places_every_record_and_the_one_on_screen(client, dsn, fleet):
+    ids = seed(dsn)
+    peaks = put_files(fleet, 1, "p", synth.peak(), 4)
+    edges = put_files(fleet, 2, "e", synth.edge_drop(), 4)
+    for n in peaks:
+        open_file(client, 1, n)
+    for n in edges:
+        open_file(client, 2, n)
+    fleet.put(1, "odd.tdf", file_of(synth.scan(synth.ramp(), source="odd::a")))
+    open_file(client, 1, "odd.tdf")
+    label(client, 1, peaks[0], f"{peaks[0]}::a", ids["단일 피크"])
+    rerun(client)
+
+    # 경로 순서: "map" 이 묶음 번호로 읽히지 않는다
+    m = client.get("/clusters/map", params={"server_id": 1, "name": peaks[1], "source": f"{peaks[1]}::a"})
+    assert m.status_code == 200, m.text
+    res = m.json()
+    assert res["has_map"] and res["scan_enum"] == "FINEHORVERT_SCAN"
+    assert len(res["points"]) == 9                                # 묶이지 않은 기록(odd)도 지도에 있다
+    by_id = {p["id"]: p for p in res["points"]}
+    assert sum(1 for p in res["points"] if p["c"] is None) == 1
+    assert sum(1 for p in res["points"] if p["l"]) == 1
+    assert {c["size"] for c in res["clusters"]} == {4}
+    t = res["target"]
+    assert t["in_run"] is True and t["cluster_no"] is not None and by_id[t["record_id"]]["x"] == t["x"]
+
+    # 결과에 없던 기록은 투영으로 놓인다 — 피크 묶음 곁에
+    fleet.put(1, "late.tdf", file_of(synth.scan(synth.peak(), gain=5.0, source="late::a")))
+    late = client.get("/clusters/map", params={"server_id": 1, "name": "late.tdf", "source": "late::a"}).json()
+    assert late["target"]["in_run"] is False and late["target"]["cluster_no"] is None
+    peak_no = t["cluster_no"]
+    peak_pts = [p for p in late["points"] if p["c"] == peak_no]
+    other = [p for p in late["points"] if p["c"] not in (peak_no, None)]
+
+    def near(ps):
+        return min((p["x"] - late["target"]["x"]) ** 2 + (p["y"] - late["target"]["y"]) ** 2 for p in ps)
+    assert near(peak_pts) < near(other)
+
+    # 점을 누르면 나오는 상세 — 라벨 · 묶음 · 지금 기록과의 유사도와 두 곡선
+    d = client.get(f"/records/{t['record_id']}",
+                   params={"vs_server_id": 1, "vs_name": "late.tdf", "vs_source": "late::a"}).json()
+    assert d["cluster_no"] == peak_no and d["name"] == peaks[1] and set(d["paths"]) == {"A", "B"}
+    assert d["vs"]["similarity"]["score"] > 0.9 and len(d["vs"]["paths"]["A"]) == 128
+    assert client.get("/records/999999").status_code == 404

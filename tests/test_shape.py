@@ -219,3 +219,41 @@ def test_leave_one_out_counts_a_level_only_for_labels_that_reach_it():
     out = shape.evaluate(items, tree)
     assert out[1]["n"] == 4 and out[1]["top1"] == 4
     assert out[3]["n"] == 2 and out[3]["top1"] == 2      # 위치 이상 › 기울기 는 소분류가 없다
+
+
+# ─── 묶음 지도 ──────────────────────────────────────────────────────────────
+
+def test_the_map_puts_like_shapes_together_and_unlike_ones_apart():
+    items = ([item(i, synth.peak(), gain=1.0 + i) for i in range(1, 6)]
+             + [item(i, synth.edge_drop(), offset=float(i)) for i in range(10, 15)])
+    out = shape.cluster_map(items)
+    pts = out["points"]
+    assert set(pts) == {it["id"] for it in items}
+
+    def gap(a, b):
+        return ((pts[a][0] - pts[b][0]) ** 2 + (pts[a][1] - pts[b][1]) ** 2) ** 0.5
+    within = max(gap(1, j) for j in range(2, 6))
+    across = min(gap(i, j) for i in range(1, 6) for j in range(10, 15))
+    assert across > 3 * within
+
+
+def test_a_record_outside_the_run_lands_where_its_twin_is():
+    items = ([item(i, synth.peak(), gain=1.0 + i) for i in range(1, 6)]
+             + [item(i, synth.ramp(), offset=float(i)) for i in range(10, 15)])
+    out = shape.cluster_map(items)
+    lms = {it["id"]: it["features"] for it in items}
+    # 결과에 없던 「피크」 하나 — 피크들 곁에 놓인다
+    x, y = shape.project_features(out["proj"], feats(synth.peak(), gain=9.0),
+                                  [lms[i] for i in out["proj"]["landmarks"]])
+    near_peak = min(((x - out["points"][i][0]) ** 2 + (y - out["points"][i][1]) ** 2) for i in range(1, 6))
+    near_ramp = min(((x - out["points"][i][0]) ** 2 + (y - out["points"][i][1]) ** 2) for i in range(10, 15))
+    assert near_peak < near_ramp
+    # 기준점 자신을 다시 투영하면 제 자리다
+    lm = out["proj"]["landmarks"][0]
+    again = shape.project_features(out["proj"], lms[lm], [lms[i] for i in out["proj"]["landmarks"]])
+    assert again == pytest.approx(out["points"][lm], abs=1e-4)
+
+
+def test_a_tiny_group_has_no_map():
+    out = shape.cluster_map([item(1, synth.peak()), item(2, synth.peak())])
+    assert out["proj"] is None and out["points"] == {1: (0.0, 0.0), 2: (0.0, 0.0)}

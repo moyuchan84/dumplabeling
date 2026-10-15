@@ -168,10 +168,21 @@ def run_clusters(store: Store, *, set_name: str) -> dict:
     """풀 전체를 다시 묶어 저장한다 (SL-CLU-1). 반환 = 저장된 결과의 요약."""
     rows, total, truncated, seq = store.pool(set_name=set_name, per_scan_limit=shape.CLUSTER_MAX_N)
     result = shape.cluster(rows)
+    # 묶음 지도 — 스캔 종류마다 따로 (SL-MAP-1). rows 는 id 순이라 결과가 결정적이다.
+    maps: dict[str, dict] = {}
+    points: list[tuple] = []
+    kinds: dict[str, list[dict]] = {}
+    for r in rows:
+        kinds.setdefault(str(r["scan_enum"] or ""), []).append(r)
+    for kind, group in kinds.items():
+        m = shape.cluster_map(group)
+        if m["proj"] is not None:
+            maps[kind] = m["proj"]
+        points += [(rid, kind, x, y) for rid, (x, y) in m["points"].items()]
     run_id = store.save_cluster_run(
         set_name=set_name, result=result, n_records=len(rows), truncated=truncated, pool_seq=seq,
         threshold=shape.CLUSTER_MIN, min_size=shape.CLUSTER_MIN_SIZE,
-        feature_version=shape.FEATURE_VERSION)
+        feature_version=shape.FEATURE_VERSION, maps=maps, points=points)
     return {"run_id": run_id, "records": len(rows), "pool": total, "truncated": truncated,
             "clusters": len(result["clusters"]), "unclustered": len(result["unclustered"])}
 

@@ -168,8 +168,47 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
 
 ### `POST /clusters/run` · `{ "set_name": "dump" }`
 
-풀 전체를 다시 묶어 저장하고(이전 결과는 지움) `GET /clusters` 와 같은 응답을 돌려줍니다. 스캔 종류마다 최근
-800건까지 — 800건에 수 초 걸립니다. 운영에서는 `python -m scanlabel.jobs cluster` 로도 돌립니다.
+다시 묶기를 **시작**하고 끝나기를 기다리지 않습니다 → `202 { "job": { "state": "running", "started_at": "…",
+"finished_at": null, "error": null } }`. 이미 돌고 있으면 그 작업을 그대로 돌려줍니다(두 번 돌지 않음).
+진행은 `GET /clusters` 의 `job` 으로 봅니다 — `running` → `done` 이면 목록이 새 결과, `failed` 면 `error` 에 이유가
+있고 목록은 이전 결과입니다. 스캔 종류마다 최근 800건까지 — 2,400건에 20초 안팎. 같은 일을
+`python -m scanlabel.jobs cluster` 로도 돌립니다(그 진행은 API 의 `job` 에 보이지 않고, 결과만 보입니다).
+
+> 요청 하나에 기다리게 하던 첫 판은 18초에서 앞단 프록시가 연결을 끊었습니다(2026-10-15) — 그래서 뒤에서 돕니다.
+
+### `GET /clusters/map?set_name=dump&scan_enum=&server_id=&name=&source=` — 묶음 지도
+
+스캔 종류 하나의 기록들을 2D 에 놓은 것 — **가까울수록 닮았습니다**(근사: 기준점 24개에 대한 거리로 놓는다).
+`server_id`·`name`·`source` 를 주면 그 기록(지금 화면의 기록)의 자리도 줍니다. `scan_enum` 을 빼면 그 기록의 종류,
+그것도 없으면 가장 많은 종류.
+
+```json
+{ "run_id": 4, "scan_enum": "FINEHORVERT_SCAN", "has_map": true,
+  "kinds": [ { "scan_enum": "FINEHORVERT_SCAN", "n": 800 }, { "scan_enum": "COARSEHORVERT_SCAN", "n": 800 } ],
+  "points": [ { "id": 12, "x": -0.2573, "y": 0.1102, "c": 2, "l": true } ],
+  "clusters": [ { "cluster_no": 2, "size": 534, "category": "ID-0603 › WS › IFM-MIOB" } ],
+  "target": { "x": 0.5604, "y": 0.0, "cluster_no": null, "record_id": 1, "in_run": false },
+  "target_kind": "FINEHORVERT_SCAN" }
+```
+
+- 점 = `id`(풀의 기록 id — `GET /records/{id}`) · 자리 · `c` 묶음 번호(묶이지 않음 = `null`) · `l` 라벨 있음.
+- `target.in_run: false` = 이번 묶음 뒤에 본 기록이거나 상한에 걸려 빠진 기록 — 같은 투영식으로 놓았고 묶음 번호는 없다.
+  그 기록의 종류가 고른 지도와 다르면 `target: null`(`target_kind` 로 알 수 있다).
+- `has_map: false` = 0004 이전에 묶은 결과 — 다시 묶으면 생깁니다. 아직 묶은 적이 없으면 404.
+
+### `GET /records/{record_id}?set_name=dump&vs_server_id=&vs_name=&vs_source=` — 기록 상세
+
+지도에서 누른 점의 기록. `vs_*` 를 주면 그 기록(지금 화면의 기록)과의 유사도와 두 곡선이 `vs` 에 옵니다.
+
+```json
+{ "record_id": 12, "servername": "…", "server_id": 1, "name": "…", "source": "…", "sig": "…", "scan_enum": "…",
+  "meta": { … }, "seen_at": "…", "labels": [ … ], "cluster_no": 2, "run_id": 4,
+  "paths": { "A": [ … 128개, z-score ] },
+  "vs": { "similarity": { "score": 0.88, "d1": 0.85, "d2": 0.9, "scale": 1.3, "by_channel": { … } },
+          "paths": { "A": [ … ] } } }
+```
+
+없는 id 는 404.
 
 ### `GET /clusters/{cluster_no}?set_name=dump&run_id=`
 

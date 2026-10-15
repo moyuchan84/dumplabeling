@@ -191,6 +191,33 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   run, with its category — the screen says 「이 기록은 묶음 #n 에 든다」 without a second call.
 - `SL-CLU-7` Thresholds (`CLUSTER_MIN`, `CLUSTER_MIN_SIZE`, `CLUSTER_AGREE`, `CLUSTER_MAX_N`) are heuristics in
   `shape.py`, like `SL-SUG-4`, and the run stores the values it used.
+- `SL-CLU-8` `POST /clusters/run` **starts** the run in a background thread and answers 202 with the job; `GET
+  /clusters` carries `job` (`running` · `done` · `failed` + reason). A second request while one runs gets the running
+  job, not a second run. The job state lives in the API process's memory (one process; `jobs cluster` from the CLI
+  is not seen there — its result is, through the stored run). Reason (2026-10-15): the run took 18 s on 2,400 records
+  and the front end's proxy hung up first, so the screen saw a 500. [test: "test_rerun_returns_at_once_and_reports_its_state"]
+  Rejected: a longer proxy timeout (the run grows n², and any request holding a proxy socket for tens of seconds
+  fails somewhere else next).
+
+## Cluster map (SL-MAP)
+
+- `SL-MAP-1` A cluster run also places every record it covered — clustered or not — in 2D, **per scan kind**
+  (`cluster_points`, migration `0004`): near = alike. Method: landmark MDS — `MAP_LANDMARKS` (24) records picked
+  max-min apart by distance `1 − score`, classical MDS on those, every other record projected from its distances to
+  the landmarks only (24 comparisons each). It is an approximation and is said to be one.
+  [test: "test_the_map_puts_like_shapes_together_and_unlike_ones_apart"]
+- `SL-MAP-2` The run stores the projection (`cluster_runs.maps`: landmark ids, pseudo-inverse, mean), so a record
+  **outside the run** — seen after it, or cut by the cap — is placed on the same map without re-running: its features
+  (from the pool, else fleet's cache) against the landmarks. Such a target says `in_run: false` and has no cluster.
+  [test: "test_a_record_outside_the_run_lands_where_its_twin_is" · "test_the_map_places_every_record_and_the_one_on_screen"]
+- `SL-MAP-3` `GET /clusters/map` answers one scan kind (default: the asked record's, else the largest): points
+  `{id, x, y, c, l}` (cluster number or null, labelled or not), each cluster's size and agreed category, and the asked
+  record's place. `GET /records/{id}` is a pool record's detail — labels, cluster, normalised curves, and with `vs_*`
+  its similarity to the record on screen. A group under 3 records has no map.
+  [test: "test_a_tiny_group_has_no_map"]
+- `SL-MAP-4` Rejected: t-SNE/UMAP (no numpy, `SL-X-6`; and neither places a new record without re-running);
+  full classical MDS (an n×n eigenproblem — 800² in pure Python); drawing clusters by colour (the screen's decision,
+  poc_viewer `DUMP-CLU-8`).
 
 ## Measurement (SL-EVAL)
 

@@ -37,6 +37,7 @@ CLUSTER_MIN = 0.80       # 묶음의 대표 기록과 이 점수 이상이어야
 CLUSTER_MIN_SIZE = 3     # 이보다 작은 무리는 묶음이 아니다(「묶이지 않음」)
 CLUSTER_MAX_N = 800      # 스캔 종류 하나에서 묶는 최대 기록 수(최근 것부터) — 쌍 비교가 n² 이다
 CLUSTER_AGREE = 0.60     # 라벨된 구성원 중 이 비율 이상이 같은 노드여야 그 묶음의 분류
+MAP_LANDMARKS = 24       # 묶음 지도의 기준점 수 — 기록마다 이만큼만 비교해 2D 자리를 정한다
 
 
 # ─── 값 읽기 ──────────────────────────────────────────────────────────────────
@@ -421,6 +422,94 @@ def cluster(items: list[Mapping]) -> dict:
 
     clusters.sort(key=lambda c: (-len(c["members"]), c["scan_enum"], _order_key(c["representative"])))
     return {"clusters": clusters, "unclustered": unclustered}
+
+
+# ─── 묶음 지도 (2D) ──────────────────────────────────────────────────────────
+
+def _dist(a: Mapping, b: Mapping) -> float:
+    """지도의 거리 = 1 − 점수 (0 같음 … 2 반대). 비교할 것이 없으면 1(상관없음)."""
+    sim = similarity(a, b)
+    s = sim["score"] if sim else None
+    return 1.0 - s if s is not None else 1.0
+
+
+def _top2(b: list[list[float]]) -> list[tuple[float, list[float]]]:
+    """대칭 행렬의 큰 고유쌍 둘 — 거듭제곱법 + 수축. k×k(k ≤ 24)라 표준 라이브러리로 충분하다."""
+    k = len(b)
+    m = [row[:] for row in b]
+    out: list[tuple[float, list[float]]] = []
+    for e in range(2):
+        v = [1.0 / math.sqrt(k) * (1 + 0.01 * ((i * 7 + e * 3) % 5)) for i in range(k)]
+        lam = 0.0
+        for _ in range(500):
+            w = [sum(m[i][j] * v[j] for j in range(k)) for i in range(k)]
+            norm = math.sqrt(sum(x * x for x in w))
+            if norm < 1e-12:
+                lam, v = 0.0, v
+                break
+            nv = [x / norm for x in w]
+            lam = sum(nv[i] * sum(m[i][j] * nv[j] for j in range(k)) for i in range(k))
+            if max(abs(a - c) for a, c in zip(nv, v)) < 1e-10:
+                v = nv
+                break
+            v = nv
+        out.append((lam, v))
+        for i in range(k):
+            for j in range(k):
+                m[i][j] -= lam * v[i] * v[j]
+    return out
+
+
+def cluster_map(items: list[Mapping]) -> dict:
+    """한 스캔 종류의 기록들을 2D 에 놓는다 — 가까울수록 닮았다 (SL-MAP-1).
+
+    방법(landmark MDS): 서로 가장 먼 기록을 차례로 `MAP_LANDMARKS` 개 고르고(maxmin), 그 기준점끼리의
+    거리로 고전 MDS 를 풀어 2D 자리를 정한 뒤, 나머지 기록은 **기준점까지의 거리만으로** 같은 공간에
+    투영한다. 같은 투영식(`proj`)으로 이 결과에 없던 기록(새로 본 기록)도 그 자리에 놓을 수 있다.
+    근사다 — 거리의 순서는 대체로 지키지만 정확한 거리는 아니다.
+
+    반환: {"points": {id: (x, y)}, "proj": {"landmarks": [id…], "pinv": [[…], […]], "mean": […]}}
+    """
+    n = len(items)
+    if n < 3:
+        return {"points": {it["id"]: (0.0, 0.0) for it in items}, "proj": None}
+    prep = [prepare(it["features"]) for it in items]
+    k = min(MAP_LANDMARKS, n)
+    # maxmin — 첫 기준점은 첫 기록(호출자가 id 순으로 넣는다 → 결정적).
+    lms = [0]
+    to_lm: list[list[float]] = [[_dist(prep[i], prep[0])] for i in range(n)]
+    nearest = [row[0] for row in to_lm]
+    while len(lms) < k:
+        nxt = max((i for i in range(n) if i not in lms), key=lambda i: (nearest[i], -i))
+        lms.append(nxt)
+        for i in range(n):
+            d = _dist(prep[i], prep[nxt]) if i != nxt else 0.0
+            to_lm[i].append(d)
+            nearest[i] = min(nearest[i], d)
+    d2 = [[to_lm[lms[a]][b] ** 2 for b in range(k)] for a in range(k)]
+    mean = [sum(d2[a][b] for a in range(k)) / k for b in range(k)]             # 열 평균
+    grand = sum(mean) / k
+    row_mean = [sum(d2[a]) / k for a in range(k)]
+    bmat = [[-0.5 * (d2[a][b] - row_mean[a] - mean[b] + grand) for b in range(k)] for a in range(k)]
+    pinv = []
+    for lam, v in _top2(bmat):
+        pinv.append([x / math.sqrt(lam) for x in v] if lam > 1e-12 else [0.0] * k)
+    proj = {"landmarks": [items[i]["id"] for i in lms], "pinv": pinv, "mean": mean}
+    points = {items[i]["id"]: project(proj, to_lm[i]) for i in range(n)}
+    return {"points": points, "proj": proj}
+
+
+def project(proj: Mapping, dists: list[float]) -> tuple[float, float]:
+    """기준점까지의 거리 → 지도의 자리. x = ½ · L⁺ · (mean − δ²)."""
+    delta = [m - d * d for m, d in zip(proj["mean"], dists)]
+    x, y = (0.5 * sum(p * q for p, q in zip(row, delta)) for row in proj["pinv"])
+    return (round(x, 5), round(y, 5))
+
+
+def project_features(proj: Mapping, features: Mapping, landmark_features: list[Mapping]) -> tuple[float, float]:
+    """결과에 없던 기록 하나를 같은 지도에 놓는다 — 기준점과 `MAP_LANDMARKS` 번만 비교한다."""
+    p = prepare(features)
+    return project(proj, [_dist(p, prepare(lf)) for lf in landmark_features])
 
 
 def _order_key(x: Any) -> float:

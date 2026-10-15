@@ -7,6 +7,7 @@ ValueError → 422 · KeyError → 404 · NotCached → 422 · FleetUnavailable 
 from __future__ import annotations
 
 import os
+import threading
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -15,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from . import shape
+from . import shape, timebase
 from .fleet_client import FileCache, Fleet, FleetError, FleetUnavailable, NotCached
 from .jobs import pool_rows, run_clusters
 from .store import Store
@@ -317,7 +318,7 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
         run = run_out(set_name)
         pool_total = store.pool_count(set_name)
         if run is None:
-            return {"run": None, "pool": pool_total, "clusters": []}
+            return {"run": None, "pool": pool_total, "clusters": [], "job": jobs_state.get(set_name)}
         tree = store.tree()
         labels = store.labels_by_record(set_name=set_name)
         groups: dict[int, list[dict]] = {}
@@ -338,16 +339,39 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
                         "representative": _record_ref(rep), "channel": ch,
                         "path": shape.normalized_paths(feats, [ch]).get(ch) if ch else None,
                         **_category_out(cat)})
-        return {"run": run, "pool": pool_total, "clusters": out}
+        return {"run": run, "pool": pool_total, "clusters": out, "job": jobs_state.get(set_name)}
+
+    # 다시 묶기는 수십 초 걸릴 수 있다 — 요청 하나에 매달면 앞단 프록시가 먼저 끊는다(socket hang up).
+    # 그래서 뒤에서 돌리고 바로 202 를 돌려준다. 상태는 이 프로세스의 메모리에만 있다(SL-CLU-8).
+    jobs_state: dict[str, dict] = {}
+    jobs_lock = threading.Lock()
+
+    def _run_job(set_name: str) -> None:
+        try:
+            run_clusters(store, set_name=set_name)
+            state = {"state": "done", "error": None}
+        except Exception as exc:                        # 실패는 화면이 말할 수 있게 남긴다
+            state = {"state": "failed", "error": f"{type(exc).__name__}: {exc}"}
+        with jobs_lock:
+            jobs_state[set_name] = {**jobs_state[set_name], **state, "finished_at": timebase.now_iso()}
 
     @app.get("/clusters")
     def list_clusters(set_name: str = "dump", scan_enum: Optional[str] = None):
         return clusters_view(set_name, scan_enum)
 
-    @app.post("/clusters/run")
+    @app.post("/clusters/run", status_code=202)
     def rerun_clusters(body: ClusterRunIn):
-        run_clusters(store, set_name=body.set_name)
-        return clusters_view(body.set_name, None)
+        """다시 묶기를 **시작**한다 — 끝나기를 기다리지 않는다. 이미 돌고 있으면 그것을 그대로 알려 준다."""
+        with jobs_lock:
+            cur = jobs_state.get(body.set_name)
+            if cur and cur["state"] == "running":
+                return {"job": cur}
+            jobs_state[body.set_name] = {"state": "running", "started_at": timebase.now_iso(),
+                                         "finished_at": None, "error": None}
+            job = jobs_state[body.set_name]
+        threading.Thread(target=_run_job, args=(body.set_name,), name=f"cluster-{body.set_name}",
+                         daemon=True).start()
+        return {"job": job}
 
     def current_run(set_name: str, run_id: Optional[int]) -> dict:
         run = store.latest_run(set_name)
@@ -357,7 +381,7 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
             raise ValueError("그새 묶음이 다시 계산됐다 — 목록을 새로 읽어 달라")
         return run
 
-    @app.get("/clusters/{cluster_no}")
+    # 경로는 아래에서 붙인다 — `/clusters/map` 보다 먼저 붙으면 "map" 을 묶음 번호로 읽어 422 가 된다.
     def get_cluster(cluster_no: int, set_name: str = "dump", run_id: Optional[int] = None):
         run = current_run(set_name, run_id)
         members = store.run_members(int(run["id"]), cluster_no=cluster_no, with_features=True)
@@ -376,6 +400,94 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
                          "path": shape.normalized_paths(m["features"], [ch]).get(ch) if ch else None}
                         for m, ids in zip(members, member_labels)],
         }
+
+    # ─── 묶음 지도 · 기록 상세 (SL-MAP) ────────────────────────────────────
+
+    def target_features(set_name: str, server_id: int, name: str, source: str) -> tuple[dict, Optional[dict]]:
+        """지도 위에 놓을 기록 — 풀에 있으면 그 행, 없으면 fleet 캐시에서 읽어 특징만."""
+        servername = fleet.servername(server_id)
+        row = store.find_record(set_name=set_name, servername=servername, name=name, source=source)
+        if row is not None:
+            return row["features"], row
+        f = files.get(server_id, set_name, name)
+        [rec] = pool_rows(f, [f.find(source)])
+        return rec["features"], {"scan_enum": rec["scan_enum"], "record_id": None}
+
+    @app.get("/clusters/map")
+    def cluster_map(set_name: str = "dump", scan_enum: Optional[str] = None,
+                    server_id: Optional[int] = None, name: Optional[str] = None,
+                    source: Optional[str] = None):
+        """최신 묶음 결과의 2D 지도 한 장(스캔 종류 하나) + 지금 기록의 자리."""
+        run = store.latest_run(set_name)
+        if run is None:
+            raise KeyError("아직 묶은 적이 없다 — 「다시 묶기」를 먼저")
+        run_id = int(run["id"])
+        kinds = store.map_kinds(run_id)
+        target = None
+        target_kind = None
+        feats = None
+        trow = None
+        if server_id is not None and name and source:
+            feats, trow = target_features(set_name, server_id, name, source)
+            target_kind = str(trow["scan_enum"] or "")
+        kind = scan_enum if scan_enum is not None else (
+            target_kind if target_kind is not None else (kinds[0]["scan_enum"] if kinds else ""))
+        tree = store.tree()
+        labels = store.labels_by_record(set_name=set_name)
+
+        if feats is not None and target_kind == kind:
+            hit = store.record_point(run_id, trow["record_id"]) if trow.get("record_id") else None
+            if hit is not None:
+                target = {"x": round(hit["x"], 4), "y": round(hit["y"], 4), "cluster_no": hit["cluster_no"],
+                          "record_id": trow["record_id"], "in_run": True}
+            elif kind in (run["maps"] or {}):
+                proj = run["maps"][kind]
+                lf = store.features_of(proj["landmarks"])
+                x, y = shape.project_features(proj, feats, [lf[i] for i in proj["landmarks"] if i in lf])
+                target = {"x": round(x, 4), "y": round(y, 4), "cluster_no": None,
+                          "record_id": trow.get("record_id"), "in_run": False}
+
+        clusters: dict[int, dict] = {}
+        points = []
+        for p in store.map_points(run_id, kind):
+            no = p["cluster_no"]
+            points.append({"id": p["record_id"], "x": round(p["x"], 4), "y": round(p["y"], 4),
+                           "c": no, "l": bool(p["labelled"])})
+            if no is not None:
+                clusters.setdefault(no, []).append(p)
+        cl_out = []
+        for no, ps in sorted(clusters.items()):
+            cat = shape.cluster_category(
+                [labels.get((m["servername"], m["name"], m["source"]), []) for m in ps], tree)["category"]
+            cl_out.append({"cluster_no": no, "size": len(ps),
+                           "category": None if cat is None else cat["path"]})
+        return {"run_id": run_id, "scan_enum": kind,
+                "kinds": [{"scan_enum": k["scan_enum"], "n": k["n"]} for k in kinds],
+                "points": points, "clusters": cl_out, "target": target,
+                "target_kind": target_kind, "has_map": kind in (run["maps"] or {})}
+
+    @app.get("/records/{record_id}")
+    def record_detail(record_id: int, set_name: str = "dump", vs_server_id: Optional[int] = None,
+                      vs_name: Optional[str] = None, vs_source: Optional[str] = None):
+        """풀의 기록 하나 — 지도에서 누른 점의 상세. `vs_*` 를 주면 그 기록과의 유사도와 두 곡선."""
+        r = store.get_record(record_id)
+        tree = store.tree()
+        ids = store.label_of(set_name=r["set_name"], servername=r["servername"], name=r["name"],
+                             source=r["source"])
+        run = store.latest_run(r["set_name"])
+        point = store.record_point(int(run["id"]), record_id) if run else None
+        out = {**_record_ref(r), "seen_at": r["seen_at"], "labels": _labels_out(tree, ids),
+               "cluster_no": point["cluster_no"] if point else None,
+               "run_id": int(run["id"]) if run else None,
+               "paths": shape.normalized_paths(r["features"]), "vs": None}
+        if vs_server_id is not None and vs_name and vs_source:
+            feats, _ = target_features(r["set_name"], vs_server_id, vs_name, vs_source)
+            sim = shape.similarity(feats, r["features"])
+            out["vs"] = {"similarity": None if sim is None else _sim_out(sim),
+                         "paths": shape.normalized_paths(feats)}
+        return out
+
+    app.get("/clusters/{cluster_no}")(get_cluster)
 
     @app.post("/clusters/{cluster_no}/apply")
     def apply_cluster(cluster_no: int, body: ClusterApplyIn):
