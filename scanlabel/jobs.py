@@ -131,34 +131,36 @@ def index(store: Store, fleet: Fleet, *, set_name: str, page: int = 500,
           max_files: Optional[int] = None) -> dict:
     """fleet 이 해석해 둔 파일을 풀에 넣는다 — `/generations` 를 커서로 따라가며 (SL-POOL-2).
 
-    커서(`index_cursors`)는 다음 실행이 이어 읽을 자리다. 한 파일의 여러 세대가 한 페이지에
-    오면 최신 하나만 읽는다(이름으로 읽으면 언제나 최신 세대다). fleet 캐시에서 이미 사라진
-    파일은 `skipped` 로 남기고 넘어간다 — FTP 는 일으키지 않는다.
+    커서(`index_cursors`)는 다음 실행이 이어 읽을 자리 — **처리한 마지막 세대의 id** 다(읽었든
+    건너뛰었든). 이번 실행에서 이미 읽은 파일의 세대가 또 오면 건너뛴다(이름으로 읽으면 언제나
+    최신 세대다). fleet 캐시에서 이미 사라진 파일은 `skipped` 로 남기고 넘어간다 — FTP 는 일으키지
+    않는다. `max_files` 에 닿으면 그 자리에서 멈추고, 다음 실행이 바로 뒤부터 잇는다.
     """
     after = store.cursor(set_name)
     files = records = 0
     skipped: list[dict] = []
-    while True:
-        rows, nxt = fleet.generations(set_name, after, limit=page)
-        if not rows:
-            break
-        seen: dict[tuple[int, str], dict] = {}
-        for r in rows:
-            seen[(int(r["server_id"]), str(r["name"]))] = r
-        for (server_id, name) in seen:
-            if max_files is not None and files >= max_files:
+    done: set[tuple[int, str]] = set()
+    try:
+        while max_files is None or files < max_files:
+            rows, _ = fleet.generations(set_name, after, limit=page)
+            if not rows:
                 break
-            try:
-                f = fleet.load_file(server_id, set_name, name)
-            except (NotCached, FleetError) as exc:
-                skipped.append({"server_id": server_id, "name": name, "why": str(exc)})
-                continue
-            records += store.upsert_records(pool_rows(f))
-            files += 1
-        if max_files is not None and files >= max_files:
-            break                                  # 커서는 다 읽은 페이지까지만 — 남은 것은 다음 실행이
-        after = int(nxt if nxt is not None else rows[-1]["id"])
-        store.set_cursor(set_name, after)
+            for r in rows:
+                if max_files is not None and files >= max_files:
+                    break
+                key = (int(r["server_id"]), str(r["name"]))
+                if key not in done:
+                    done.add(key)
+                    try:
+                        f = fleet.load_file(key[0], set_name, key[1])
+                    except (NotCached, FleetError) as exc:
+                        skipped.append({"server_id": key[0], "name": key[1], "why": str(exc)})
+                    else:
+                        records += store.upsert_records(pool_rows(f))
+                        files += 1
+                after = int(r["id"])
+    finally:
+        store.set_cursor(set_name, after)          # 도중에 실패해도 처리한 데까지는 남긴다
     return {"files": files, "records": records, "skipped": skipped, "cursor": after}
 
 

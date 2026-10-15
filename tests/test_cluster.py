@@ -141,9 +141,13 @@ def test_index_follows_the_generation_cursor_without_ftp(dsn, fleet):
         assert all(b.get("source") == "cache" for m, p, b in fleet.calls if m == "POST")
         again = index(store, client, set_name="dump")
         assert again["files"] == 0                                # 커서 뒤에 새 세대가 없다
-        put_files(fleet, 1, "j", synth.peak(), 1)
-        assert index(store, client, set_name="dump")["files"] == 1
-        assert store.pool_count("dump") == 4
+        put_files(fleet, 1, "j", synth.peak(), 3)
+        # 상한에 닿으면 거기서 멈추고, 다음 실행은 바로 뒤부터 — 같은 파일을 다시 읽지 않는다
+        part = index(store, client, set_name="dump", max_files=2)
+        assert part["files"] == 2 and part["cursor"] == 6
+        rest = index(store, client, set_name="dump", max_files=2)
+        assert rest["files"] == 1 and rest["cursor"] == 7
+        assert store.pool_count("dump") == 6
     finally:
         client.close()
         store.close()
