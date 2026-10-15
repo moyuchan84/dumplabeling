@@ -37,17 +37,20 @@ def dsn(_migrated: str) -> str:
 
 
 class FakeFleet:
-    """fleet 의 두 라우트만 흉내 낸다 — GET /servers, POST /servers/{id}/items/dump."""
+    """fleet 의 세 라우트만 흉내 낸다 — GET /servers, POST /servers/{id}/items/dump, GET /generations."""
 
     def __init__(self):
         self.servers = [{"id": 1, "host": "10.0.0.1", "servername": "scanner-a"},
                         {"id": 2, "host": "10.0.0.2", "servername": "scanner-b"}]
         self.files: dict[tuple[int, str], dict] = {}     # (server_id, name) → {sig, records}
+        self.gens: list[dict] = []                        # /generations 의 행 (도착 순서)
         self.calls: list[tuple[str, str, dict]] = []
         self.down = False
 
     def put(self, server_id: int, name: str, records: list, sig: str = "20260811T005720-100"):
         self.files[(server_id, name)] = {"sig": sig, "records": records}
+        self.gens.append({"id": len(self.gens) + 1, "server_id": server_id, "set_name": "dump",
+                          "name": name, "sig": sig})
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if self.down:
@@ -56,6 +59,12 @@ class FakeFleet:
         self.calls.append((request.method, request.url.path, body))
         if request.method == "GET" and request.url.path == "/servers":
             return httpx.Response(200, json=self.servers)
+        if request.method == "GET" and request.url.path == "/generations":
+            after = int(request.url.params["after_id"])
+            limit = int(request.url.params.get("limit", 200))
+            rows = [g for g in self.gens if g["id"] > after][:limit]
+            return httpx.Response(200, json={"generations": rows,
+                                             "next_after_id": rows[-1]["id"] if rows else None})
         parts = request.url.path.strip("/").split("/")
         if request.method == "POST" and len(parts) == 4 and parts[0] == "servers" and parts[2] == "items":
             sid = int(parts[1])

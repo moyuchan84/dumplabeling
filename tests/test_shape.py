@@ -142,6 +142,76 @@ def test_a_label_stopped_at_the_middle_level_carries_its_own_case():
     assert res["suggestion"]["label_id"] == 12 and res["suggestion"]["case_id"] == 12
 
 
+def test_prepared_features_score_exactly_like_raw_snapshots():
+    pairs = [(feats(synth.peak()), feats(synth.peak(), cols=90, gain=3.0)),
+             (feats(synth.peak()), feats(synth.ramp())),
+             (feats(lambda x, z: 0.0), feats(lambda x, z: 0.0)),
+             (feats(synth.peak(), cols=30, rows=20), feats(synth.peak(), cols=60, rows=40))]
+    for a, b in pairs:
+        raw, fast = shape.similarity(a, b), shape.similarity(shape.prepare(a), shape.prepare(b))
+        for k in ("score", "d1", "d2", "scale"):
+            if raw[k] is None:
+                assert fast[k] is None
+            else:
+                assert fast[k] == pytest.approx(raw[k], abs=1e-12)
+
+
+# ─── 유사 사례 ──────────────────────────────────────────────────────────────
+
+def test_similar_cases_are_grouped_by_case_and_ignore_unlike_records():
+    tree = Tree(TREE_ROWS)
+    res = shape.rank(feats(synth.peak()), [cand(synth.peak(), [111], gain=2.0),
+                                           cand(synth.peak(), [111], gain=3.0),
+                                           cand(synth.edge_drop(), [12])], tree)
+    assert [c["case_id"] for c in res["cases"]] == [7]           # 레벨 저하(사례 12)는 닮지 않았다
+    assert res["cases"][0]["count"] == 2 and res["cases"][0]["score"] > 0.95
+    assert res["cases"][0]["paths"] == ["신호 이상 › 피크 › 단일 피크"]
+
+
+# ─── 묶음 ──────────────────────────────────────────────────────────────────
+
+def item(i, fn, scan_enum="S", **kw):
+    return {"id": i, "features": feats(fn, **kw), "scan_enum": scan_enum}
+
+
+def test_clusters_group_like_shapes_and_leave_the_rest_unclustered():
+    items = ([item(i, synth.peak(), gain=1.0 + i) for i in range(1, 5)]
+             + [item(i, synth.edge_drop(), offset=float(i)) for i in range(10, 13)]
+             + [item(20, synth.ramp()), item(21, synth.two_peaks())])
+    out = shape.cluster(items)
+    groups = [sorted(m["id"] for m in c["members"]) for c in out["clusters"]]
+    assert groups == [[1, 2, 3, 4], [10, 11, 12]]                # 큰 묶음 먼저
+    assert sorted(out["unclustered"]) == [20, 21]
+    first = out["clusters"][0]
+    assert first["members"][0]["representative"] is True and first["members"][0]["score"] == 1.0
+    assert all(m["score"] >= shape.CLUSTER_MIN for m in first["members"])
+
+
+def test_clusters_never_mix_scan_kinds():
+    items = ([item(i, synth.peak(), scan_enum="A") for i in range(1, 3)]
+             + [item(i, synth.peak(), scan_enum="B") for i in range(3, 5)])
+    out = shape.cluster(items)                                    # 종류마다 2개뿐 — 묶음이 못 된다
+    assert out["clusters"] == [] and sorted(out["unclustered"]) == [1, 2, 3, 4]
+    out = shape.cluster(items + [item(5, synth.peak(), scan_enum="A")])
+    assert [c["scan_enum"] for c in out["clusters"]] == ["A"]
+    assert sorted(m["id"] for m in out["clusters"][0]["members"]) == [1, 2, 5]
+
+
+def test_cluster_category_is_the_deepest_level_the_labelled_members_agree_on():
+    tree = Tree(TREE_ROWS)
+    # 셋 중 둘이 단일 피크, 하나는 이중 피크 → 중분류(피크)는 3/3 합의, 소분류는 2/3 ≥ 0.6
+    got = shape.cluster_category([[111], [111], [112], []], tree)
+    assert got["labelled"] == 3 and got["unlabelled"] == 1
+    assert got["category"]["label_id"] == 111 and got["category"]["level"] == 3
+    assert got["category"]["case_id"] == 7
+    # 반반으로 갈리면 소분류는 합의가 아니다 — 중분류에서 멈춘다
+    got = shape.cluster_category([[111], [112]], tree)
+    assert got["category"]["label_id"] == 11 and got["category"]["level"] == 2
+    assert not any(e["agreed"] for e in got["levels"][3])
+    # 라벨된 구성원이 없으면 분류도 없다
+    assert shape.cluster_category([[], []], tree)["category"] is None
+
+
 def test_leave_one_out_counts_a_level_only_for_labels_that_reach_it():
     tree = Tree(TREE_ROWS)
     items = [cand(synth.peak(), [111]), cand(synth.peak(), [111], gain=2.0),

@@ -1,7 +1,8 @@
 # scanlabel
 
 dump 기록(스캔 한 건)에 **대분류 › 중분류 › 소분류 라벨**을 붙이고, 화면에 띄운 기록과 **모양이 닮은
-라벨된 기록**을 찾아 그 라벨을 단계별로 제안하는 서비스입니다.
+라벨된 기록**을 찾아 그 라벨을 단계별로 제안하는 서비스입니다. 라벨이 없는 기록까지 **모양으로 묶어(클러스터)**
+묶음 단위로 분류하고, 닮은 기록들이 가리키는 **유사 사례**(fleet `acs_case`)를 모아 보여 줍니다.
 
 - fleet(ftpmodule)의 공개 HTTP API 를 **캐시로만** 읽습니다 — FTP 를 일으키지 않고, fleet DB 를 읽지 않습니다.
 - 화면은 poc_viewer 의 Dump → 「사례」 패널 → 「이 기록 라벨」 탭입니다.
@@ -38,6 +39,23 @@ VS Code 에서는 워크스페이스의 `scanlabel API (8100)` 구성(또는 com
 - 여러 번 넣어도 됩니다(멱등) — 이미 있는 노드는 그대로 쓰고 빈 코드 · 설명 · 사례만 채웁니다.
 - `사례번호` 는 fleet `acs_case.case_id` 입니다.
 
+## 기록 풀과 묶음
+
+묶음(클러스터)은 scanlabel 이 **본 기록 전부**(라벨 없는 것 포함)를 대상으로 합니다. 기록은 세 길로 풀에 들어옵니다.
+
+- 화면에서 Dump 파일을 열면(그 파일의 제안을 물을 때) 그 파일의 기록 전부.
+- 라벨을 저장하면 그 기록.
+- `jobs index` — fleet 이 해석해 둔 dump 파일을 `/generations` 커서로 따라가며 넣습니다(캐시만, FTP 없음).
+  주기적으로 돌리면 아무도 열지 않은 파일도 묶음에 들어갑니다.
+
+```powershell
+.\.venv\Scripts\python -m scanlabel.jobs index           # 이어서 읽는다 (커서는 DB 의 index_cursors)
+.\.venv\Scripts\python -m scanlabel.jobs cluster         # 화면의 「다시 묶기」와 같은 일
+```
+
+묶기는 스캔 종류마다 최근 기록 `CLUSTER_MAX_N`(800)개까지입니다 — 모든 쌍을 비교하므로(800개에 약 6초) 상한이
+있고, 넘친 수는 결과에 `truncated` 로 나옵니다.
+
 ## 측정
 
 ```powershell
@@ -46,7 +64,8 @@ VS Code 에서는 워크스페이스의 `scanlabel API (8100)` 구성(또는 com
 ```
 
 라벨이 수십 건 쌓이면 `eval` 로 「닮은 모양 = 같은 원인」이 실제로 맞는지부터 확인합니다. 문턱값 · 가중치는
-`scanlabel/shape.py` 의 상수 한 곳에만 있습니다.
+`scanlabel/shape.py` 의 상수 한 곳에만 있습니다. `refeature` 는 라벨된 기록과 기록 풀을 함께 새 판으로
+바꿉니다 — 그 뒤 `cluster` 를 다시 돌립니다.
 
 ## 테스트
 

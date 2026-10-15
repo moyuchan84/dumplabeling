@@ -114,6 +114,15 @@ class Fleet:
             raise KeyError(f"fleet 에 없는 서버 id: {server_id}")
         return table[server_id]
 
+    def generations(self, set_name: str, after_id: int, *, limit: int = 500) -> tuple[list[dict], Optional[int]]:
+        """fleet 이 해석해 둔 세대를 도착 순서로 — `GET /generations` (FTP 없음, fleet README.api.md §2.2.2).
+
+        `after_id` 를 주면 그 뒤의 것만 id 오름차순이다. (행들, 다음 커서 — 빈 페이지면 None).
+        """
+        body = self._call("GET", "/generations",
+                          params={"set_name": set_name, "after_id": after_id, "limit": limit}).json()
+        return list(body.get("generations") or []), body.get("next_after_id")
+
     def load_file(self, server_id: int, set_name: str, name: str) -> FileScans:
         """그 파일의 최신 해석 세대 — 캐시에서만. 없으면 NotCached."""
         servername = self.servername(server_id)

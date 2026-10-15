@@ -240,6 +240,150 @@ class Store:
         with self._conn() as c:
             return self._tree(c)
 
+    def labels_by_record(self, *, set_name: str) -> dict[tuple[str, str, str], list[int]]:
+        """(servername, name, source) → 붙은 라벨 id — 묶음의 분류를 셀 때 쓴다."""
+        with self._conn() as c:
+            rows = c.execute("SELECT servername, name, source, label_ids FROM scan_labels"
+                             " WHERE set_name = %s", (set_name,)).fetchall()
+        return {(r["servername"], r["name"], r["source"]): [int(i) for i in r["label_ids"]] for r in rows}
+
+    # ─── 기록 풀 (SL-POOL) ──────────────────────────────────────────────────
+
+    def upsert_records(self, rows: Iterable[dict]) -> int:
+        """본 기록들의 특징을 풀에 넣거나 갈아 끼운다. 키 = (servername, set_name, name, source)."""
+        rows = list(rows)
+        if not rows:
+            return 0
+        now = timebase.now_iso()
+        with self._conn() as c, c.transaction(), c.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO scan_records (servername, server_id, set_name, name, source, sig, scan_enum,"
+                " meta, feature_version, features, seen_at, updated_at)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                " ON CONFLICT ON CONSTRAINT scan_records_record_key DO UPDATE SET"
+                "  server_id = EXCLUDED.server_id, sig = EXCLUDED.sig, scan_enum = EXCLUDED.scan_enum,"
+                "  meta = EXCLUDED.meta, feature_version = EXCLUDED.feature_version,"
+                "  features = EXCLUDED.features, updated_at = EXCLUDED.updated_at,"
+                "  seq = nextval('scan_records_seq')"
+                # 같은 세대 · 같은 특징 판이면 모양이 같다 — 쓰지 않는다(묶음이 낡았다고 말하지 않게).
+                " WHERE (scan_records.sig, scan_records.feature_version, scan_records.scan_enum)"
+                "  IS DISTINCT FROM (EXCLUDED.sig, EXCLUDED.feature_version, EXCLUDED.scan_enum)",
+                [(r["servername"], r["server_id"], r["set_name"], r["name"], r["source"], r["sig"],
+                  r["scan_enum"], Jsonb(r["meta"]), r["feature_version"], Jsonb(r["features"]), now, now)
+                 for r in rows])
+        return len(rows)
+
+    def pool(self, *, set_name: str, per_scan_limit: int) -> tuple[list[dict], int, int, int]:
+        """묶을 기록 — 스캔 종류마다 최근 것부터 `per_scan_limit` 개.
+
+        (행들, 전체 수, 잘린 수, 풀의 최대 seq). 한 트랜잭션에서 읽어 넷이 서로 맞는다.
+        """
+        with self._conn() as c, c.transaction():
+            c.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            head = c.execute("SELECT count(*) AS n, COALESCE(max(seq), 0) AS seq FROM scan_records"
+                             " WHERE set_name = %s", (set_name,)).fetchone()
+            rows = c.execute(
+                "SELECT id, scan_enum, features FROM ("
+                "  SELECT id, scan_enum, features, row_number() OVER"
+                "   (PARTITION BY scan_enum ORDER BY seq DESC, id DESC) AS rn"
+                "  FROM scan_records WHERE set_name = %s) t WHERE rn <= %s ORDER BY id",
+                (set_name, per_scan_limit)).fetchall()
+        total = int(head["n"])
+        return rows, total, total - len(rows), int(head["seq"])
+
+    def stale_pool(self, set_name: str, feature_version: int) -> dict[tuple[int, str], set[str]]:
+        """특징 판이 다른 풀 기록 — (server_id, 파일) → source 들."""
+        with self._conn() as c:
+            rows = c.execute("SELECT server_id, name, source FROM scan_records WHERE set_name = %s"
+                             " AND feature_version <> %s", (set_name, feature_version)).fetchall()
+        out: dict[tuple[int, str], set[str]] = {}
+        for r in rows:
+            out.setdefault((int(r["server_id"]), r["name"]), set()).add(r["source"])
+        return out
+
+    def pool_count(self, set_name: str) -> int:
+        with self._conn() as c:
+            return int(c.execute("SELECT count(*) AS n FROM scan_records WHERE set_name = %s",
+                                 (set_name,)).fetchone()["n"])
+
+    def features_of(self, record_ids: Iterable[int]) -> dict[int, dict]:
+        ids = list(record_ids)
+        if not ids:
+            return {}
+        with self._conn() as c:
+            rows = c.execute("SELECT id, features FROM scan_records WHERE id = ANY(%s)", (ids,)).fetchall()
+        return {int(r["id"]): r["features"] for r in rows}
+
+    def pool_changed_since(self, *, set_name: str, seq: int) -> bool:
+        """묶은 뒤에 풀에 새로 들어오거나 모양이 바뀐 기록이 있나."""
+        with self._conn() as c:
+            return c.execute("SELECT EXISTS (SELECT 1 FROM scan_records WHERE set_name = %s"
+                             " AND seq > %s) AS x", (set_name, seq)).fetchone()["x"]
+
+    def cursor(self, set_name: str) -> int:
+        with self._conn() as c:
+            row = c.execute("SELECT after_id FROM index_cursors WHERE set_name = %s", (set_name,)).fetchone()
+        return int(row["after_id"]) if row else 0
+
+    def set_cursor(self, set_name: str, after_id: int) -> None:
+        with self._conn() as c:
+            c.execute("INSERT INTO index_cursors (set_name, after_id, updated_at) VALUES (%s,%s,%s)"
+                      " ON CONFLICT (set_name) DO UPDATE SET after_id = EXCLUDED.after_id,"
+                      " updated_at = EXCLUDED.updated_at", (set_name, after_id, timebase.now_iso()))
+
+    # ─── 묶음 (SL-CLU) ──────────────────────────────────────────────────────
+
+    def save_cluster_run(self, *, set_name: str, result: dict, n_records: int, truncated: int,
+                         pool_seq: int, threshold: float, min_size: int, feature_version: int) -> int:
+        """묶음 결과 한 벌을 저장한다. 그 set 의 이전 결과는 지운다 — 최신 것 하나만 있다."""
+        with self._conn() as c, c.transaction():
+            c.execute("DELETE FROM cluster_runs WHERE set_name = %s", (set_name,))
+            run_id = int(c.execute(
+                "INSERT INTO cluster_runs (set_name, threshold, min_size, feature_version, n_records,"
+                " n_clusters, n_unclustered, truncated, pool_seq, created_at)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                (set_name, threshold, min_size, feature_version, n_records, len(result["clusters"]),
+                 len(result["unclustered"]), truncated, pool_seq, timebase.now_iso())).fetchone()["id"])
+            with c.cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO cluster_members (run_id, cluster_no, record_id, scan_enum, score,"
+                    " representative) VALUES (%s,%s,%s,%s,%s,%s)",
+                    [(run_id, no, m["id"], cl["scan_enum"], m["score"], m["representative"])
+                     for no, cl in enumerate(result["clusters"], start=1) for m in cl["members"]])
+        return run_id
+
+    def latest_run(self, set_name: str) -> Optional[dict]:
+        with self._conn() as c:
+            return c.execute("SELECT * FROM cluster_runs WHERE set_name = %s ORDER BY id DESC LIMIT 1",
+                             (set_name,)).fetchone()
+
+    def run_members(self, run_id: int, *, cluster_no: Optional[int] = None,
+                    with_features: bool = False) -> list[dict]:
+        """묶음 구성원 + 풀의 기록 정보. 묶음 번호 → 대표 먼저 → 점수 순."""
+        cols = ("m.cluster_no, m.scan_enum, m.score, m.representative, r.id AS record_id, r.servername,"
+                " r.server_id, r.set_name, r.name, r.source, r.sig, r.meta")
+        if with_features:
+            cols += ", r.features"
+        q = (f"SELECT {cols} FROM cluster_members m JOIN scan_records r ON r.id = m.record_id"
+             f" WHERE m.run_id = %s")
+        args: list[Any] = [run_id]
+        if cluster_no is not None:
+            q += " AND m.cluster_no = %s"
+            args.append(cluster_no)
+        with self._conn() as c:
+            return c.execute(q + " ORDER BY m.cluster_no, m.representative DESC, m.score DESC, r.id",
+                             args).fetchall()
+
+    def record_cluster(self, *, set_name: str, servername: str, name: str, source: str) -> Optional[dict]:
+        """이 기록이 최신 묶음 결과의 어느 묶음에 들었나 — 없으면 None."""
+        with self._conn() as c:
+            return c.execute(
+                "SELECT m.run_id, m.cluster_no FROM cluster_members m"
+                " JOIN scan_records r ON r.id = m.record_id"
+                " JOIN cluster_runs k ON k.id = m.run_id"
+                " WHERE k.set_name = %s AND r.servername = %s AND r.name = %s AND r.source = %s"
+                " ORDER BY m.run_id DESC LIMIT 1", (set_name, servername, name, source)).fetchone()
+
     def set_features(self, label_id: int, features: dict, feature_version: int) -> None:
         with self._conn() as c:
             c.execute("UPDATE scan_labels SET features = %s, feature_version = %s, updated_at = %s"

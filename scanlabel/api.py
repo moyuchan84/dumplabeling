@@ -16,8 +16,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from . import shape
-from .fleet_client import FileCache, Fleet, FleetError, FleetUnavailable, NotCached, meta_summary
+from .fleet_client import FileCache, Fleet, FleetError, FleetUnavailable, NotCached
+from .jobs import pool_rows, run_clusters
 from .store import Store
+from .tree import check_selection
 
 
 class LabelIn(BaseModel):
@@ -56,6 +58,18 @@ class SimilarIn(BaseModel):
     same_scan_only: bool = True
 
 
+class ClusterRunIn(BaseModel):
+    set_name: str = "dump"
+
+
+class ClusterApplyIn(BaseModel):
+    set_name: str = "dump"
+    run_id: int = Field(..., description="본 묶음 결과의 id — 그새 다시 묶였으면 422")
+    label_ids: list[int] = Field(..., min_length=1)
+    record_ids: Optional[list[int]] = Field(None, description="없으면 묶음 전체")
+    only_unlabelled: bool = Field(True, description="이미 라벨된 구성원은 건드리지 않는다")
+
+
 def _r(x: Optional[float], digits: int = 3) -> Optional[float]:
     return None if x is None else round(x, digits)
 
@@ -71,6 +85,32 @@ def _sim_out(sim: dict) -> dict:
 
 def _level_out(entries: list[dict]) -> list[dict]:
     return [{**e, "score": _r(e["score"])} for e in entries]
+
+
+def _labels_out(tree, ids) -> list[dict]:
+    return [{"id": int(i), "level": int(tree.get(int(i))["level"]), "path": tree.path(int(i)),
+             "case_id": tree.case_for(int(i))} for i in ids or [] if int(i) in tree]
+
+
+def _record_ref(r: dict) -> dict:
+    return {"record_id": r["record_id"], "servername": r["servername"], "server_id": r["server_id"],
+            "name": r["name"], "source": r["source"], "sig": r["sig"], "scan_enum": r["scan_enum"],
+            "meta": r["meta"]}
+
+
+def _show_channel(features: Optional[dict]) -> Optional[str]:
+    """묶음을 그려 보일 채널 — 1D 경로가 있는 채널 중 이름 순 첫째. 한 묶음 안에서는 모두 같은 채널."""
+    chans = (features or {}).get("channels") or {}
+    keys = sorted(k for k, v in chans.items() if (v or {}).get("path"))
+    return keys[0] if keys else None
+
+
+def _category_out(cat: dict) -> dict:
+    def entry(e: dict) -> dict:
+        return {**e, "share": _r(e["share"])}
+    return {"labelled": cat["labelled"], "unlabelled": cat["unlabelled"],
+            "levels": {str(k): [entry(e) for e in v] for k, v in cat["levels"].items()},
+            "category": None if cat["category"] is None else entry(cat["category"])}
 
 
 def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
@@ -155,12 +195,13 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
         # 저장은 항상 새로 읽는다 — 그 시점의 세대와 모양을 남긴다.
         f = files.get(body.server_id, body.set_name, body.name, fresh=True)
         scan = f.find(body.source)
-        meta = meta_summary(scan.meta)
+        [rec] = pool_rows(f, [scan])
         row = store.upsert_label(
             servername=servername, server_id=body.server_id, set_name=body.set_name,
-            name=body.name, source=body.source, sig=f.sig,
-            scan_enum=str(meta.get("scan_enum") or ""), meta=meta, label_ids=body.label_ids,
-            features=shape.record_features(scan.scan), feature_version=shape.FEATURE_VERSION)
+            name=body.name, source=body.source, sig=f.sig, scan_enum=rec["scan_enum"],
+            meta=rec["meta"], label_ids=body.label_ids, features=rec["features"],
+            feature_version=shape.FEATURE_VERSION)
+        store.upsert_records([rec])                   # 라벨된 기록은 언제나 풀에도 있다 (SL-POOL-1)
         return {"label": row}
 
     @app.delete("/labels")
@@ -189,17 +230,21 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
             return str((scan.meta or {}).get("scan_enum") or "")
 
         if body.source is None:
+            # 파일 전체를 물었다 = 화면에서 그 파일을 열었다 — 그 기록들을 풀에 넣는다 (SL-POOL-1).
+            rows = pool_rows(f)
+            store.upsert_records(rows)
             out = []
-            for s in f.scans:
-                feats = shape.record_features(s.scan)
-                res = shape.rank(feats, others(s.source, scan_enum_of(s)), tree, k=0)
+            for s, rec in zip(f.scans, rows):
+                res = shape.rank(rec["features"], others(s.source, scan_enum_of(s)), tree, k=0)
                 sug = res["suggestion"]
                 out.append({"source": s.source,
                             "suggestion": None if sug is None else {**sug, "score": _r(sug["score"])}})
             return {"sig": f.sig, "records": out}
 
         s = f.find(body.source)
-        feats = shape.record_features(s.scan)
+        [rec] = pool_rows(f, [s])
+        store.upsert_records([rec])
+        feats = rec["features"]
         res = shape.rank(feats, others(s.source, scan_enum_of(s)), tree, k=body.k)
         matches = []
         for m in res["matches"]:
@@ -223,7 +268,140 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
             "levels": {str(k): _level_out(v) for k, v in res["levels"].items()},
             "suggestion": None if sug is None else {**sug, "score": _r(sug["score"])},
             "compared": len(others(s.source, scan_enum_of(s))),
+            "cases": [{**c, "score": _r(c["score"])} for c in res["cases"]],
+            "cluster": record_cluster(body.set_name, servername, body.name, s.source, tree),
         }
+
+    # ─── 사례 → 기록 (SL-CASE-2) ────────────────────────────────────────────
+
+    @app.get("/labels/by-case/{case_id}")
+    def records_of_case(case_id: int, set_name: str = "dump", limit: int = Query(50, ge=1, le=500)):
+        """이 사례를 가리키는 라벨(자기나 조상의 case_id)이 붙은 기록들 — 최근 것 먼저."""
+        tree = store.tree()
+        out = []
+        for c in store.candidates(set_name=set_name):
+            ids = [i for i in c["label_ids"] if i in tree and tree.case_for(i) == case_id]
+            if ids:
+                out.append({"id": c["id"], "servername": c["servername"], "server_id": c["server_id"],
+                            "name": c["name"], "source": c["source"], "sig": c["sig"],
+                            "scan_enum": c["scan_enum"], "meta": c["meta"], "updated_at": c["updated_at"],
+                            "labels": _labels_out(tree, ids)})
+        out.sort(key=lambda r: r["updated_at"], reverse=True)
+        return {"case_id": case_id, "total": len(out), "records": out[:limit]}
+
+    # ─── 묶음 (SL-CLU) ──────────────────────────────────────────────────────
+
+    def record_cluster(set_name: str, servername: str, name: str, source: str, tree) -> Optional[dict]:
+        hit = store.record_cluster(set_name=set_name, servername=servername, name=name, source=source)
+        if hit is None:
+            return None
+        members = store.run_members(int(hit["run_id"]), cluster_no=int(hit["cluster_no"]))
+        labels = store.labels_by_record(set_name=set_name)
+        cat = shape.cluster_category(
+            [labels.get((m["servername"], m["name"], m["source"]), []) for m in members], tree)
+        return {"run_id": int(hit["run_id"]), "cluster_no": int(hit["cluster_no"]),
+                "size": len(members), "scan_enum": members[0]["scan_enum"] if members else "",
+                **_category_out(cat)}
+
+    def run_out(set_name: str) -> Optional[dict]:
+        run = store.latest_run(set_name)
+        if run is None:
+            return None
+        return {"id": run["id"], "created_at": run["created_at"], "records": run["n_records"],
+                "clusters": run["n_clusters"], "unclustered": run["n_unclustered"],
+                "truncated": run["truncated"], "threshold": _r(run["threshold"]),
+                "min_size": run["min_size"],
+                "stale": store.pool_changed_since(set_name=set_name, seq=int(run["pool_seq"]))}
+
+    def clusters_view(set_name: str, scan_enum: Optional[str]) -> dict:
+        run = run_out(set_name)
+        pool_total = store.pool_count(set_name)
+        if run is None:
+            return {"run": None, "pool": pool_total, "clusters": []}
+        tree = store.tree()
+        labels = store.labels_by_record(set_name=set_name)
+        groups: dict[int, list[dict]] = {}
+        for m in store.run_members(run["id"]):
+            groups.setdefault(int(m["cluster_no"]), []).append(m)
+        rep_feats = store.features_of([g[0]["record_id"] for g in groups.values()])
+        out = []
+        for no, members in sorted(groups.items()):
+            rep = members[0]
+            if scan_enum is not None and rep["scan_enum"] != scan_enum:
+                continue
+            cat = shape.cluster_category(
+                [labels.get((m["servername"], m["name"], m["source"]), []) for m in members], tree)
+            feats = rep_feats.get(rep["record_id"])
+            ch = _show_channel(feats)
+            out.append({"cluster_no": no, "scan_enum": rep["scan_enum"], "size": len(members),
+                        "min_score": _r(min(m["score"] for m in members)),
+                        "representative": _record_ref(rep), "channel": ch,
+                        "path": shape.normalized_paths(feats, [ch]).get(ch) if ch else None,
+                        **_category_out(cat)})
+        return {"run": run, "pool": pool_total, "clusters": out}
+
+    @app.get("/clusters")
+    def list_clusters(set_name: str = "dump", scan_enum: Optional[str] = None):
+        return clusters_view(set_name, scan_enum)
+
+    @app.post("/clusters/run")
+    def rerun_clusters(body: ClusterRunIn):
+        run_clusters(store, set_name=body.set_name)
+        return clusters_view(body.set_name, None)
+
+    def current_run(set_name: str, run_id: Optional[int]) -> dict:
+        run = store.latest_run(set_name)
+        if run is None:
+            raise KeyError("아직 묶은 적이 없다 — 「다시 묶기」를 먼저")
+        if run_id is not None and int(run["id"]) != run_id:
+            raise ValueError("그새 묶음이 다시 계산됐다 — 목록을 새로 읽어 달라")
+        return run
+
+    @app.get("/clusters/{cluster_no}")
+    def get_cluster(cluster_no: int, set_name: str = "dump", run_id: Optional[int] = None):
+        run = current_run(set_name, run_id)
+        members = store.run_members(int(run["id"]), cluster_no=cluster_no, with_features=True)
+        if not members:
+            raise KeyError(f"없는 묶음: {cluster_no}")
+        tree = store.tree()
+        labels = store.labels_by_record(set_name=set_name)
+        member_labels = [labels.get((m["servername"], m["name"], m["source"]), []) for m in members]
+        ch = _show_channel(members[0]["features"])
+        return {
+            "run_id": int(run["id"]), "cluster_no": cluster_no, "scan_enum": members[0]["scan_enum"],
+            "size": len(members), "channel": ch,
+            **_category_out(shape.cluster_category(member_labels, tree)),
+            "members": [{**_record_ref(m), "score": _r(m["score"]), "representative": m["representative"],
+                         "labels": _labels_out(tree, ids),
+                         "path": shape.normalized_paths(m["features"], [ch]).get(ch) if ch else None}
+                        for m, ids in zip(members, member_labels)],
+        }
+
+    @app.post("/clusters/{cluster_no}/apply")
+    def apply_cluster(cluster_no: int, body: ClusterApplyIn):
+        """묶음 구성원에게 라벨을 한 번에 붙인다 — 풀의 스냅샷을 쓰므로 fleet 을 부르지 않는다 (SL-CLU-5)."""
+        run = current_run(body.set_name, body.run_id)
+        members = store.run_members(int(run["id"]), cluster_no=cluster_no, with_features=True)
+        if not members:
+            raise KeyError(f"없는 묶음: {cluster_no}")
+        tree = store.tree()
+        ids = check_selection(tree, body.label_ids)      # 붙이기 전에 한 번 — 하나도 쓰지 않고 422
+        wanted = set(body.record_ids) if body.record_ids is not None else None
+        labels = store.labels_by_record(set_name=body.set_name)
+        applied = skipped = 0
+        for m in members:
+            if wanted is not None and m["record_id"] not in wanted:
+                continue
+            if body.only_unlabelled and labels.get((m["servername"], m["name"], m["source"])):
+                skipped += 1
+                continue
+            store.upsert_label(
+                servername=m["servername"], server_id=int(m["server_id"]), set_name=m["set_name"],
+                name=m["name"], source=m["source"], sig=m["sig"], scan_enum=m["scan_enum"],
+                meta=m["meta"], label_ids=ids, features=m["features"],
+                feature_version=shape.FEATURE_VERSION)
+            applied += 1
+        return {"applied": applied, "skipped": skipped}
 
     return app
 

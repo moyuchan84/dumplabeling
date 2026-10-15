@@ -8,12 +8,12 @@ requirement and decision** — read it before changing behaviour, and edit it in
 
 | File | Responsibility |
 |---|---|
-| `scanlabel/shape.py` | **Pure** — snapshot features, similarity, ranking with the tree roll-up, leave-one-out evaluation. Every threshold and weight lives here, as a constant. Knows no DB, no HTTP |
+| `scanlabel/shape.py` | **Pure** — snapshot features, similarity (+ `prepare` for many comparisons), ranking with the tree roll-up, similar cases, clustering and a cluster's category, leave-one-out evaluation. Every threshold and weight lives here, as a constant. Knows no DB, no HTTP |
 | `scanlabel/tree.py` | **Pure** — the label tree's rules: path, ancestors, effective retirement, selection check, level of a new node, move check |
-| `scanlabel/fleet_client.py` | The only place that calls fleet — `GET /servers`, `POST /servers/{id}/items/{set}` with `source: "cache"`; structural pairing of raw scans and metas; the short per-file cache |
-| `scanlabel/store.py` | PostgreSQL — raw SQL over a psycopg pool. `ValueError` → 422, `KeyError` → 404. Verifies the schema version at start and refuses on a mismatch |
+| `scanlabel/fleet_client.py` | The only place that calls fleet — `GET /servers`, `GET /generations`, `POST /servers/{id}/items/{set}` with `source: "cache"`; structural pairing of raw scans and metas; the short per-file cache |
+| `scanlabel/store.py` | PostgreSQL — raw SQL over a psycopg pool: label tree, record labels, the record pool (`scan_records`), the index cursor, cluster runs. `ValueError` → 422, `KeyError` → 404. Verifies the schema version at start and refuses on a mismatch |
 | `scanlabel/api.py` | FastAPI routes — contract in `README.api.md` |
-| `scanlabel/jobs.py` | CLI — `seed-labels` · `eval` · `refeature` |
+| `scanlabel/jobs.py` | CLI — `seed-labels` · `eval` · `refeature` · `index` · `cluster`; also `pool_rows`/`run_clusters`, which the API shares |
 | `scanlabel/migrate.py` + `migrations/` | Numbered forward-only SQL, immutable once applied (checksum), one transaction per file |
 
 ## Rules

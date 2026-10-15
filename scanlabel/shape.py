@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import math
+import operator
 from typing import Any, Iterable, Mapping, Optional
 
 from .tree import MAX_LEVEL, Tree
@@ -30,6 +31,12 @@ SUGGEST_MIN = 0.80       # 이 점수 이상이어야 「제안」
 MARGIN = 0.05            # 같은 단계의 2위보다 이만큼 앞서야 「확실」(아니면 갈림)
 EVIDENCE_MIN = 0.60      # 근거 건수에 넣는 최소 점수
 LEVEL_TOP = 5            # 단계별 순위에 싣는 노드 수
+CASE_TOP = 5             # 유사 사례 목록에 싣는 사례 수
+
+CLUSTER_MIN = 0.80       # 묶음의 대표 기록과 이 점수 이상이어야 그 묶음의 구성원
+CLUSTER_MIN_SIZE = 3     # 이보다 작은 무리는 묶음이 아니다(「묶이지 않음」)
+CLUSTER_MAX_N = 800      # 스캔 종류 하나에서 묶는 최대 기록 수(최근 것부터) — 쌍 비교가 n² 이다
+CLUSTER_AGREE = 0.60     # 라벨된 구성원 중 이 비율 이상이 같은 노드여야 그 묶음의 분류
 
 
 # ─── 값 읽기 ──────────────────────────────────────────────────────────────────
@@ -151,19 +158,54 @@ def zscore(vals: list[float]) -> list[float]:
     return [(v - mean) / std for v in vals]
 
 
+def _zcorr(za: list[float], zb: list[float]) -> float:
+    """z-score 된 두 배열의 상관 — `_corr` 의 뒷부분. 미리 정규화해 둔 쪽(prepare)이 이것만 부른다."""
+    r = _dot(za, zb) / len(za)
+    return max(-1.0, min(1.0, r))
+
+
+# math.sumprod(3.12+)는 C 에서 곱해 더한다 — 묶음의 n² 비교에서 대부분의 시간이 여기다.
+_dot = getattr(math, "sumprod", None) or (lambda a, b: sum(map(operator.mul, a, b)))
+
+
 def _corr(a: list[float], b: list[float]) -> float:
     fa, fb = _flat(a), _flat(b)
     if fa or fb:
         return 1.0 if (fa and fb) else 0.0
-    za, zb = zscore(a), zscore(b)
-    r = sum(p * q for p, q in zip(za, zb)) / len(za)
-    return max(-1.0, min(1.0, r))
+    return _zcorr(zscore(a), zscore(b))
+
+
+def prepare(features: Mapping) -> dict:
+    """비교 준비 — 채널마다 z-score 를 한 번만 한다. 결과는 `similarity` 에 스냅샷 대신 넣을 수 있다.
+
+    값은 스냅샷 그대로 비교한 것과 **같다**: 1D 는 언제나 전 구간이고, 2D 는 빈 칸이 없을 때만
+    미리 정규화한다(빈 칸이 있으면 공통 칸이 상대마다 달라 그때그때 정규화해야 한다). 묶음처럼
+    한 기록을 수백 번 비교할 때 쓴다.
+    """
+    if features.get("_prepared"):
+        return dict(features)
+    out = {}
+    for key, ch in (features.get("channels") or {}).items():
+        path, grid = ch.get("path"), ch.get("grid")
+        p: dict[str, Any] = {"path": path, "grid": grid, "stats": ch.get("stats")}
+        if path:
+            p["pflat"] = _flat(path)
+            p["zp"] = None if p["pflat"] else zscore(path)
+        if grid and all(v is not None for v in grid):
+            p["gflat"] = _flat(grid)
+            p["zg"] = None if p["gflat"] else zscore(grid)
+        out[key] = p
+    return {"_prepared": True, "channels": out}
 
 
 def _score_1d(a: Mapping, b: Mapping) -> Optional[float]:
     pa, pb = a.get("path"), b.get("path")
     if not pa or not pb or len(pa) != len(pb):
         return None
+    if "pflat" in a and "pflat" in b:
+        if a["pflat"] or b["pflat"]:
+            return 1.0 if (a["pflat"] and b["pflat"]) else 0.0
+        return _zcorr(a["zp"], b["zp"])
     return _corr(pa, pb)
 
 
@@ -171,6 +213,11 @@ def _score_2d(a: Mapping, b: Mapping) -> Optional[float]:
     ga, gb = a.get("grid"), b.get("grid")
     if not ga or not gb or len(ga) != len(gb):
         return None
+    if "gflat" in a and "gflat" in b and len(ga) >= MIN_OVERLAP:
+        # 둘 다 빈 칸이 없다 — 공통 칸 = 전부라서 미리 한 정규화가 그대로 맞다.
+        if a["gflat"] or b["gflat"]:
+            return 1.0 if (a["gflat"] and b["gflat"]) else 0.0
+        return _zcorr(a["zg"], b["zg"])
     both = [(p, q) for p, q in zip(ga, gb) if p is not None and q is not None]
     if len(both) < MIN_OVERLAP:
         return None
@@ -187,7 +234,7 @@ def _scale(a: Mapping, b: Mapping) -> Optional[float]:
 
 
 def similarity(a: Mapping, b: Mapping) -> Optional[dict]:
-    """두 스냅샷의 유사도. 같은 이름의 채널이 하나도 없거나 비교할 것이 없으면 None."""
+    """두 스냅샷(또는 `prepare` 한 것)의 유사도. 같은 이름의 채널이 하나도 없거나 비교할 것이 없으면 None."""
     ca, cb = a.get("channels") or {}, b.get("channels") or {}
     by_channel = {}
     for key in ca.keys() & cb.keys():
@@ -287,7 +334,139 @@ def rank(target: Mapping, candidates: Iterable[Mapping], tree: Tree, *, k: int =
         "matches": [{"similarity": sim, "candidate": c} for sim, c in scored[:k]],
         "levels": levels,
         "suggestion": deepest,
+        "cases": similar_cases(scored, tree),
     }
+
+
+def similar_cases(scored: list[tuple[dict, Mapping]], tree: Tree) -> list[dict]:
+    """유사 사례 — 비슷한 기록들의 라벨이 가리키는 사례(acs_case)를 사례 단위로 모은다 (SL-CASE-1).
+
+    한 기록은 붙은 라벨마다 `tree.case_for` 의 사례 하나에 표를 던진다. 사례 점수 = 그 사례로 온
+    기록의 최고 점수, `count` = 그중 `EVIDENCE_MIN` 이상인 기록 수. `EVIDENCE_MIN` 아래의 기록만
+    가리키는 사례는 싣지 않는다 — 닮지 않은 기록의 사례는 근거가 아니다.
+    """
+    cases: dict[Any, dict] = {}
+    for sim, c in scored:
+        if sim["score"] < EVIDENCE_MIN:
+            continue
+        for lid in c["label_ids"]:
+            if int(lid) not in tree:
+                continue
+            cid = tree.case_for(int(lid))
+            if cid is None:
+                continue
+            e = cases.setdefault(cid, {"case_id": cid, "score": -1.0, "count": 0, "paths": [], "_seen": set()})
+            e["score"] = max(e["score"], sim["score"])
+            key = id(c)
+            if key not in e["_seen"]:
+                e["_seen"].add(key)
+                e["count"] += 1
+            path = tree.path(int(lid))
+            if path not in e["paths"]:
+                e["paths"].append(path)
+    out = sorted(cases.values(), key=lambda e: (-e["score"], -e["count"], str(e["case_id"])))
+    for e in out:
+        del e["_seen"]
+    return out[:CASE_TOP]
+
+
+# ─── 묶음 (클러스터) ─────────────────────────────────────────────────────────
+
+def cluster(items: list[Mapping]) -> dict:
+    """라벨과 무관하게 본 기록들을 모양으로 묶는다 (SL-CLU-2).
+
+    items 의 각 항목: `id` · `features` · `scan_enum`. 호출자가 스캔 종류마다 `CLUSTER_MAX_N` 개로
+    잘라서 넣는다. 스캔 종류마다 따로 묶는다 — 경로가 다르면 1D 비교가 무의미하다(SL-SIM-2).
+
+    방법(대표 기록 묶음): 모든 쌍을 비교해 `CLUSTER_MIN` 이상인 이웃을 센다. 남은 기록 중 이웃이
+    가장 많은 것을 **대표**로 고르고, 그 대표와 `CLUSTER_MIN` 이상인 남은 기록을 한 묶음으로 뗀다.
+    묶음이 `CLUSTER_MIN_SIZE` 보다 작아지면 멈추고 나머지는 「묶이지 않음」이다. 구성원 모두가
+    **대표와 직접** 닮았으므로 한 묶음이 사슬처럼 늘어나 서로 다른 모양을 잇지 않는다.
+    결과는 결정적이다(동점은 이웃 점수 합, 그다음 id).
+    """
+    groups: dict[str, list[Mapping]] = {}
+    for it in items:
+        groups.setdefault(str(it.get("scan_enum") or ""), []).append(it)
+
+    clusters: list[dict] = []
+    unclustered: list = []
+    for scan_enum in sorted(groups):
+        group = groups[scan_enum]
+        ids = [g["id"] for g in group]
+        prep = [prepare(g["features"]) for g in group]
+        n = len(group)
+        nb: list[dict[int, float]] = [{} for _ in range(n)]
+        for i in range(n):
+            for j in range(i + 1, n):
+                sim = similarity(prep[i], prep[j])
+                s = sim["score"] if sim else None
+                if s is not None and s >= CLUSTER_MIN:
+                    nb[i][j] = s
+                    nb[j][i] = s
+        left = set(range(n))
+        while left:
+            def density(i: int) -> tuple:
+                near = nb[i].keys() & left
+                return (len(near), sum(nb[i][j] for j in near), -_order_key(ids[i]))
+            rep = max(left, key=density)
+            near = nb[rep].keys() & left
+            if len(near) + 1 < CLUSTER_MIN_SIZE:
+                break
+            members = [{"id": ids[rep], "score": 1.0, "representative": True}]
+            members += sorted(({"id": ids[j], "score": nb[rep][j], "representative": False} for j in near),
+                              key=lambda m: (-m["score"], _order_key(m["id"])))
+            clusters.append({"scan_enum": scan_enum, "representative": ids[rep], "members": members})
+            left -= near | {rep}
+        unclustered += [ids[i] for i in sorted(left)]
+
+    clusters.sort(key=lambda c: (-len(c["members"]), c["scan_enum"], _order_key(c["representative"])))
+    return {"clusters": clusters, "unclustered": unclustered}
+
+
+def _order_key(x: Any) -> float:
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def cluster_category(member_labels: list[list[int]], tree: Tree) -> dict:
+    """한 묶음의 분류 — 라벨된 구성원들의 라벨을 단계별로 센다 (SL-CLU-4).
+
+    `member_labels` = 구성원마다 붙은 라벨 id(라벨 없으면 빈 목록). 라벨은 조상까지 센다(SL-SUG-1).
+    단계 L 의 노드 몫 = 그 노드를 가진 라벨된 구성원 / 라벨된 구성원 전체. 단계 L 이 **합의**되려면
+    1위 몫이 `CLUSTER_AGREE` 이상이고, 2위보다 많고, (L>1 이면) 바로 위 단계의 합의 노드의 자식이어야
+    한다. `category` = 합의된 가장 깊은 단계(없으면 None) — 라벨 안 된 구성원에게 붙일 후보다.
+    """
+    labelled = [[int(i) for i in ids if int(i) in tree] for ids in member_labels]
+    labelled = [ids for ids in labelled if ids]
+    n = len(labelled)
+    counts: dict[int, int] = {}
+    for ids in labelled:
+        for node in tree.closure(ids):
+            counts[node] = counts.get(node, 0) + 1
+    levels: dict[int, list[dict]] = {}
+    chosen: Optional[int] = None
+    category = None
+    for level in range(1, MAX_LEVEL + 1):
+        row = sorted(((i, c) for i, c in counts.items() if int(tree.get(i)["level"]) == level),
+                     key=lambda t: (-t[1], t[0]))
+        agreed = False
+        if row and n and (level == 1 or chosen is not None):
+            top_id, top = row[0]
+            parent = tree.get(top_id)["parent_id"]
+            agreed = (top / n >= CLUSTER_AGREE
+                      and (len(row) < 2 or top > row[1][1])
+                      and (level == 1 or (parent is not None and int(parent) == chosen)))
+        chosen = row[0][0] if agreed else None
+        levels[level] = [
+            {"label_id": i, "path": tree.path(i), "count": c, "share": c / n,
+             "case_id": tree.case_for(i), "agreed": agreed and j == 0}
+            for j, (i, c) in enumerate(row[:LEVEL_TOP])
+        ]
+        if agreed:
+            category = {**levels[level][0], "level": level}
+    return {"labelled": n, "unlabelled": len(member_labels) - n, "levels": levels, "category": category}
 
 
 def evaluate(labelled: list[Mapping], tree: Tree, *, same_scan_only: bool = True) -> dict:

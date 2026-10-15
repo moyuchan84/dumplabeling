@@ -8,6 +8,10 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 
 - `SL-ROLE-1` scanlabel lets a person put a **label** on one dump record (one raw scan, all its channels)
   and, for a record on screen, finds **labelled records whose shape is similar** and suggests their labels.
+- `SL-ROLE-4` It also **groups every record it has seen — labelled or not — by shape** (clusters), reads each
+  group's category off its labelled members, labels a group at once, and gathers the **cases** (fleet `acs_case`)
+  that similar records point at (2026-10-15, the user's ask: 「그래프에 대한 클러스터링 포함 유사사례 카테고리화,
+  유사사례 조회」).
 - `SL-ROLE-2` It is a **separate project** from fleet (ftpmodule). fleet stays "fetch · parse · serve";
   shape analysis, labels and their growth (clustering, classifiers, numpy) live here.
   The user's words: 「ftpmodule 은 데이터를 가져와서 parsing 하는거 위주였는데 … 별도의 project 를 분기해서」.
@@ -117,6 +121,60 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 - `SL-SUG-5` Without a `source`, `/labels/similar` answers one suggestion per record of the file — what the
   record list marks.
 
+## Similar cases (SL-CASE)
+
+- `SL-CASE-1` `/labels/similar` (with a `source`) answers `cases`: the cases the **similar labelled records** point
+  at, one entry per case — each record votes, for every label it carries, for that label's case (`tree.case_for`,
+  `SL-TREE-9`). Case score = the best score among its records, `count` = how many; only records scoring
+  ≥ `EVIDENCE_MIN` vote (an unlike record's case is not evidence); at most `CASE_TOP` = 5.
+  [test: "test_similar_cases_are_grouped_by_case_and_ignore_unlike_records" · "test_similar_cases_and_records_of_a_case"]
+- `SL-CASE-2` `GET /labels/by-case/{case_id}` goes the other way — the labelled records whose label resolves to that
+  case (its own or an ancestor's `case_id`), newest first. [test: "test_similar_cases_and_records_of_a_case"]
+- `SL-CASE-3` A case's title and body stay in fleet (`/cases/{id}`); scanlabel carries only the id.
+
+## Record pool (SL-POOL)
+
+- `SL-POOL-1` `scan_records` holds one feature snapshot per record scanlabel has **seen**, labelled or not — the
+  material clustering needs, since `scan_labels` holds only labelled records. A record enters when its file's
+  suggestions are asked for (= the file was opened on screen), when it is labelled, or through `jobs index`.
+  Migration `0002` copies the already-labelled records in. [test: "test_opening_a_file_and_labelling_put_records_in_the_pool"]
+- `SL-POOL-2` `jobs index` follows fleet's `GET /generations` with its own cursor (`index_cursors`), reads each new
+  file **from cache only** and puts its records in the pool; a file whose cache is gone is reported as `skipped`.
+  It is the periodic way to include files nobody opened. [test: "test_index_follows_the_generation_cursor_without_ftp"]
+- `SL-POOL-3` A pool row is rewritten only when its generation, feature version or scan kind changes; that rewrite
+  takes a new `seq`. Re-opening an unchanged file changes nothing — so it does not make the clusters stale.
+- `SL-POOL-4` `jobs refeature` rebuilds stale pool rows as well as labelled ones: one comparison definition across
+  the pool.
+
+## Clusters (SL-CLU)
+
+- `SL-CLU-1` A cluster run groups the pool and is **stored** (`cluster_runs` + `cluster_members`, only the latest
+  run per set is kept), so the screen, the cluster numbers and a bulk label all refer to the same result. It runs on
+  request (`POST /clusters/run`, the screen's 「다시 묶기」) or from `jobs cluster`; nothing re-clusters behind a
+  reader's back. A run remembers the pool's highest `seq`; a higher one in the pool makes it `stale`.
+- `SL-CLU-2` The method is **representative-seeded grouping**: all pairs within one scan kind are compared, the
+  record with the most neighbours ≥ `CLUSTER_MIN` (0.80) becomes a representative, it and its remaining neighbours
+  form a cluster, repeat; groups smaller than `CLUSTER_MIN_SIZE` (3) stay unclustered. Every member resembles the
+  representative **directly**, so a cluster cannot chain unlike shapes together; ties break by neighbour score sum,
+  then id — deterministic.
+  [test: "test_clusters_group_like_shapes_and_leave_the_rest_unclustered" · "test_clusters_never_mix_scan_kinds"]
+- `SL-CLU-3` Clusters never cross scan kinds (`SL-SIM-2`). Each kind is capped at the `CLUSTER_MAX_N` (800) most
+  recently changed records — the comparison is n², measured at ≈ 6 s for 800 (`math.sumprod`, prepared z-scores,
+  `shape.prepare`, which scores exactly like the raw snapshot); the cut is reported as `truncated`.
+  [test: "test_prepared_features_score_exactly_like_raw_snapshots"]
+- `SL-CLU-4` A cluster's **category** is read off its labelled members per level, each label counting for its
+  ancestors (`SL-SUG-1`): a level agrees when its top node holds ≥ `CLUSTER_AGREE` (0.60) of the labelled members,
+  more than the runner-up, and is a child of the agreed node one level up. The category is the deepest agreed
+  level, or none. [test: "test_cluster_category_is_the_deepest_level_the_labelled_members_agree_on"]
+- `SL-CLU-5` `POST /clusters/{no}/apply` labels a cluster's members at once (by default only the unlabelled ones,
+  optionally a chosen subset) from the pool's snapshots — fleet is not called. The selection is checked once before
+  anything is written; a `run_id` other than the latest is a 422, so a re-run never redirects a bulk label.
+  [test: "test_a_cluster_label_is_applied_to_its_unlabelled_members_at_once"]
+- `SL-CLU-6` `/labels/similar` (with a `source`) answers `cluster`: the cluster the record belongs to in the latest
+  run, with its category — the screen says 「이 기록은 묶음 #n 에 든다」 without a second call.
+- `SL-CLU-7` Thresholds (`CLUSTER_MIN`, `CLUSTER_MIN_SIZE`, `CLUSTER_AGREE`, `CLUSTER_MAX_N`) are heuristics in
+  `shape.py`, like `SL-SUG-4`, and the run stores the values it used.
+
 ## Measurement (SL-EVAL)
 
 - `SL-EVAL-1` `jobs eval` runs leave-one-out over the labelled records: per level, top-1 and top-3 hit
@@ -139,4 +197,13 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 - `SL-X-5` **pgvector** — tens to thousands of labels are compared exhaustively in Python in tens of ms;
   an extension is one more thing a closed-network PostgreSQL has to carry.
 - `SL-X-6` **numpy at the start** — not needed at this size; `shape.py` is the only file that would change
-  once it is known to be fetchable.
+  once it is known to be fetchable. Clustering kept it out too: `math.sumprod` brought 800 records from ≈ 60 s to
+  ≈ 6 s (2026-10-15).
+- `SL-X-7` **Clustering on the fly, unstored** — cluster numbers would shift between the list, the detail and a
+  bulk label as records arrive, and a bulk label must name exactly the members the person looked at (`SL-CLU-5`).
+- `SL-X-8` **k-means / hierarchical (average-linkage) clustering** — k-means needs k and a vector space the
+  correlation score is not; average linkage in pure Python is O(n³) at this size and its clusters have no member
+  that every other member resembles, so a cluster cannot be shown by one representative curve. Revisit with numpy
+  and thousands of records per scan kind.
+- `SL-X-9` **Single-linkage (connected components of the ≥ 0.8 graph)** — chains: A~B~C joins A and C however
+  unlike they are.
