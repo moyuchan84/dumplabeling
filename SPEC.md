@@ -57,7 +57,24 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 - `SL-TREE-9` A case link (`case_id` → fleet `acs_case`) is written **once, on the label node** — 「this shape
   is this case」. Shown for a node is its own case, else its nearest ancestor's.
   [test: "test_a_label_stopped_at_the_middle_level_carries_its_own_case"]
-- `SL-TREE-10` `labels.seed.example.json` is a **development placeholder**, not the real taxonomy.
+- `SL-TREE-10` `labels.seed.example.json` is a **development placeholder**, not the real taxonomy (that is
+  `SL-TREE-12`).
+- `SL-TREE-11` **Three levels, fixed — a deeper source is folded, not extended** (2026-10-15). The source table
+  `0603.md` (`error_no › category › error`) has names that read like a fourth level — `WS › IFM-MIOB` ·
+  `IFM-NC5` …, `C&T › Air shower-air balance` · `Air shower-leakage or damage`. Such a prefix group stays **inside
+  the 소분류 name**; search still finds every `IFM-*` by `IFM` (`DUMP-LBL-4` matches names). Reason: suggestions
+  and cluster agreement (`SL-SUG-2` · `SL-CLU-4`) need several records on one node, and a deeper level thins them
+  further; per-level evaluation (`SL-EVAL-1`) assumes levels mean the same thing across branches.
+  Rejected: a fourth level only where the source hints at one (ragged depth — level-wise rates and agreement no
+  longer compare branch to branch); the prefix as the 소분류 and the part dropped (loses the part).
+  Revisit when `jobs eval` shows the 소분류 splitting among one prefix's members while the prefix itself is sure —
+  i.e. people know 「IFM」 but not which part, and stopping at the 중분류 throws that away.
+  [test: "test_taxonomy_0603_is_a_fixed_three_level_tree_and_idempotent"]
+- `SL-TREE-12` The real taxonomy **ID-0603** arrives with migration `0003` (대분류 = `error_no`, 중분류 =
+  `category`, 소분류 = `error`; a blank `error` ends the branch at the 중분류 — `SW/Firmware`), in the file's order,
+  `origin = 'seed'`, no codes (the source has none). It skips a node whose sibling name already exists, so a DB
+  that loaded the same table through `jobs seed-labels` is safe. It does not touch the placeholder tree.
+  [test: "test_taxonomy_0603_is_a_fixed_three_level_tree_and_idempotent"]
 
 ## Record labels (SL-LBL)
 
