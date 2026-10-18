@@ -37,7 +37,7 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 
 - `SL-TREE-1` Labels are a **three-level tree** — 대분류 › 중분류 › 소분류 (`label_defs`, `level` 1–3).
   A 대분류 has no parent, a 중분류's parent is a 대분류, a 소분류's parent is a 중분류. Enforced by `CHECK`
-  constraints and `tree.py`. [test: "test_the_parent_sets_the_level_and_nothing_goes_below_a_leaf" · "test_tree_rules_are_enforced"]
+  constraints and `processing/tree.py`. [test: "test_the_parent_sets_the_level_and_nothing_goes_below_a_leaf" · "test_tree_rules_are_enforced"]
 - `SL-TREE-2` The tree is **chosen from, not typed**: free-text tags split one shape into spellings
   (`edge drop` / `엣지드롭`) and the suggestions split with them. When nothing fits, a new node is added
   **at the level where the person is** (`origin = 'added'`) and is an ordinary label from then on.
@@ -133,7 +133,7 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   sure level — 「대분류는 확실, 소분류는 갈림」 is said as such.
   [test: "test_a_split_leaf_stops_the_suggestion_at_the_middle_level" · "test_nothing_is_suggested_below_an_unsure_level"]
 - `SL-SUG-3` Below the threshold nothing is suggested. A forced suggestion would read as evidence.
-- `SL-SUG-4` Thresholds and weights are **heuristics** in `shape.py` constants, and only there. They are
+- `SL-SUG-4` Thresholds and weights are **heuristics** in `processing/shape.py` constants, and only there. They are
   tuned by `SL-EVAL`, not by feel.
 - `SL-SUG-5` Without a `source`, `/labels/similar` answers one suggestion per record of the file — what the
   record list marks.
@@ -190,7 +190,7 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 - `SL-CLU-6` `/labels/similar` (with a `source`) answers `cluster`: the cluster the record belongs to in the latest
   run, with its category — the screen says 「이 기록은 묶음 #n 에 든다」 without a second call.
 - `SL-CLU-7` Thresholds (`CLUSTER_MIN`, `CLUSTER_MIN_SIZE`, `CLUSTER_AGREE`, `CLUSTER_MAX_N`) are heuristics in
-  `shape.py`, like `SL-SUG-4`, and the run stores the values it used.
+  `processing/shape.py`, like `SL-SUG-4`, and the run stores the values it used.
 - `SL-CLU-8` `POST /clusters/run` **starts** the run in a background thread and answers 202 with the job; `GET
   /clusters` carries `job` (`running` · `done` · `failed` + reason). A second request while one runs gets the running
   job, not a second run. The job state lives in the API process's memory (one process; `jobs cluster` from the CLI
@@ -227,6 +227,24 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 - `SL-EVAL-2` "Similar shapes share a cause" is a **hypothesis** until `jobs eval` says otherwise on real
   labels; real dump samples were not available when this was built (ftpmodule ROADMAP item 1).
 
+## Structure (SL-ARCH)
+
+- `SL-ARCH-1` The code is four areas, like fleet's: `processing/` (pure: `shape` · `tree`), `connectors/` (fleet over
+  HTTP), `data/` (PostgreSQL `Store` + migrations), `application/` (`usecases` · `api` · `jobs`). Dependencies point
+  down only — `processing` ← `data` ← `application`, `connectors` ← `application`; `processing` imports the
+  standard library and itself. `timebase.py` is the one top-level module (the only wall-clock reads).
+  [test: "test_processing_stays_pure" · "test_connectors_know_nothing_of_the_other_areas" · "test_data_reaches_only_processing_and_timebase" · "test_wall_clock_reads_live_only_in_timebase"]
+- `SL-ARCH-2` `api.py` and `jobs.py` are adapters over `usecases.py` and never import each other (2026-10-19: `api.py`
+  used to import `jobs.py` for `pool_rows` / `run_clusters`). [test: "test_the_thin_adapters_do_not_call_each_other"]
+- `SL-ARCH-3` Each area's reference doc is its `__spec__.md`; a settled decision is recorded once in the owning one
+  (Decision / Reason / Rejected / Revisit when / Validation). [test: "test_every_area_has_its_spec"]
+- `SL-ARCH-4` The 2026-10-19 split moved files only: no table, column or migration changed, and the ledger's
+  checksums (of file bytes) are untouched, so an existing database needs nothing. The entry points did move —
+  `scanlabel.application.api:app` · `scanlabel.application.jobs` · `scanlabel.data.migrate`.
+  [test: "test_migrations_sit_next_to_their_runner"]
+  Rejected: re-export shims at the old module paths (they would keep the flat layout importable and hide
+  stale callers; the only callers are the workspace's launch/task configs and the docs, updated with this change).
+
 ## Rejected (SL-X)
 
 - `SL-X-1` **Doing this inside fleet** (an `application/shape.py` + `scan_labels` in fleet's schema). It would
@@ -240,7 +258,7 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 - `SL-X-4` **Free-text tags** — see `SL-TREE-2`.
 - `SL-X-5` **pgvector** — tens to thousands of labels are compared exhaustively in Python in tens of ms;
   an extension is one more thing a closed-network PostgreSQL has to carry.
-- `SL-X-6` **numpy at the start** — not needed at this size; `shape.py` is the only file that would change
+- `SL-X-6` **numpy at the start** — not needed at this size; `processing/shape.py` is the only file that would change
   once it is known to be fetchable. Clustering kept it out too: `math.sumprod` brought 800 records from ≈ 60 s to
   ≈ 6 s (2026-10-15).
 - `SL-X-7` **Clustering on the fly, unstored** — cluster numbers would shift between the list, the detail and a

@@ -5,9 +5,9 @@ import time
 
 import httpx
 
-from scanlabel.fleet_client import Fleet
-from scanlabel.jobs import index
-from scanlabel.store import Store
+from scanlabel.connectors.fleet import Fleet
+from scanlabel.application.usecases import index
+from scanlabel.data.repository import Store
 
 from . import synth
 from .test_api import file_of, label, seed

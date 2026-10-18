@@ -1,7 +1,7 @@
 """PostgreSQL 접근 — 라벨 트리(label_defs)와 기록 라벨(scan_labels). 원시 SQL, ORM 없음.
 
 검증 실패는 `ValueError`(→ 422), 없는 행은 `KeyError`(→ 404) — fleet `Store` 와 같은 약속.
-트리 규칙의 판단은 `tree.py` 에 있고, 여기는 그것을 DB 에 적용한다.
+트리 규칙의 판단은 `processing/tree.py` 에 있고, 여기는 그것을 DB 에 적용한다.
 """
 from __future__ import annotations
 
@@ -14,7 +14,9 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-from . import migrate, timebase, tree as treemod
+from .. import timebase
+from ..processing import tree as treemod
+from . import migrate
 
 _DEF_COLS = ("id, parent_id, level, code, name, description, case_id, origin, retired, sort_no,"
              " author, created_at, updated_at")
@@ -26,7 +28,7 @@ _TEXT_MAX = 2000
 
 
 class SchemaError(RuntimeError):
-    """DB 스키마가 코드와 다르다 — `python -m scanlabel.migrate up` 을 먼저 돌린다."""
+    """DB 스키마가 코드와 다르다 — `python -m scanlabel.data.migrate up` 을 먼저 돌린다."""
 
 
 def _clean_name(v: Any) -> str:
@@ -54,7 +56,7 @@ class Store:
         if have != want:
             self._pool.close()
             raise SchemaError(f"DB 스키마 {have:04d} ≠ 코드 {want:04d} — "
-                              "python -m scanlabel.migrate up 을 먼저 돌린다")
+                              "python -m scanlabel.data.migrate up 을 먼저 돌린다")
 
     def close(self) -> None:
         self._pool.close()

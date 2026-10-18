@@ -17,9 +17,9 @@ python -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt
 $env:SCANLABEL_DB_DSN = 'postgresql://postgres@127.0.0.1:5433/scanlabel'
 $env:FLEET_API_URL    = 'http://localhost:8787'        # 목(poc_viewer npm run mock) 또는 fleet 8000
 $env:PYTHONUTF8 = '1'
-.\.venv\Scripts\python -m scanlabel.migrate up
-.\.venv\Scripts\python -m scanlabel.jobs seed-labels labels.seed.example.json   # 임시 트리
-.\.venv\Scripts\python -m uvicorn scanlabel.api:app --port 8100
+.\.venv\Scripts\python -m scanlabel.data.migrate up
+.\.venv\Scripts\python -m scanlabel.application.jobs seed-labels labels.seed.example.json   # 임시 트리
+.\.venv\Scripts\python -m uvicorn scanlabel.application.api:app --port 8100
 ```
 
 DB 가 없으면 한 번 만듭니다: `psql -h 127.0.0.1 -p 5433 -U postgres -c "CREATE DATABASE scanlabel"`.
@@ -54,8 +54,8 @@ VS Code 에서는 워크스페이스의 `scanlabel API (8100)` 구성(또는 com
   주기적으로 돌리면 아무도 열지 않은 파일도 묶음에 들어갑니다.
 
 ```powershell
-.\.venv\Scripts\python -m scanlabel.jobs index           # 이어서 읽는다 (커서는 DB 의 index_cursors)
-.\.venv\Scripts\python -m scanlabel.jobs cluster         # 화면의 「다시 묶기」와 같은 일
+.\.venv\Scripts\python -m scanlabel.application.jobs index           # 이어서 읽는다 (커서는 DB 의 index_cursors)
+.\.venv\Scripts\python -m scanlabel.application.jobs cluster         # 화면의 「다시 묶기」와 같은 일
 ```
 
 묶기는 스캔 종류마다 최근 기록 `CLUSTER_MAX_N`(800)개까지입니다 — 모든 쌍을 비교하므로(800개에 약 6초) 상한이
@@ -64,12 +64,12 @@ VS Code 에서는 워크스페이스의 `scanlabel API (8100)` 구성(또는 com
 ## 측정
 
 ```powershell
-.\.venv\Scripts\python -m scanlabel.jobs eval            # leave-one-out 단계별 적중률
-.\.venv\Scripts\python -m scanlabel.jobs refeature       # FEATURE_VERSION 이 바뀐 뒤
+.\.venv\Scripts\python -m scanlabel.application.jobs eval            # leave-one-out 단계별 적중률
+.\.venv\Scripts\python -m scanlabel.application.jobs refeature       # FEATURE_VERSION 이 바뀐 뒤
 ```
 
 라벨이 수십 건 쌓이면 `eval` 로 「닮은 모양 = 같은 원인」이 실제로 맞는지부터 확인합니다. 문턱값 · 가중치는
-`scanlabel/shape.py` 의 상수 한 곳에만 있습니다. `refeature` 는 라벨된 기록과 기록 풀을 함께 새 판으로
+`scanlabel/processing/shape.py` 의 상수 한 곳에만 있습니다. `refeature` 는 라벨된 기록과 기록 풀을 함께 새 판으로
 바꿉니다 — 그 뒤 `cluster` 를 다시 돌립니다.
 
 ## 테스트

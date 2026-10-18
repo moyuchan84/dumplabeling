@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from scanlabel.tree import Tree, check_move, check_selection, child_level
+from scanlabel.processing.tree import Tree, check_move, check_selection, child_level
 
 ROWS = [
     {"id": 1, "parent_id": None, "level": 1, "name": "신호 이상", "retired": False},

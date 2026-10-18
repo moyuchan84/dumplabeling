@@ -172,7 +172,7 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
 "finished_at": null, "error": null } }`. 이미 돌고 있으면 그 작업을 그대로 돌려줍니다(두 번 돌지 않음).
 진행은 `GET /clusters` 의 `job` 으로 봅니다 — `running` → `done` 이면 목록이 새 결과, `failed` 면 `error` 에 이유가
 있고 목록은 이전 결과입니다. 스캔 종류마다 최근 800건까지 — 2,400건에 20초 안팎. 같은 일을
-`python -m scanlabel.jobs cluster` 로도 돌립니다(그 진행은 API 의 `job` 에 보이지 않고, 결과만 보입니다).
+`python -m scanlabel.application.jobs cluster` 로도 돌립니다(그 진행은 API 의 `job` 에 보이지 않고, 결과만 보입니다).
 
 > 요청 하나에 기다리게 하던 첫 판은 18초에서 앞단 프록시가 연결을 끊었습니다(2026-10-15) — 그래서 뒤에서 돕니다.
 
