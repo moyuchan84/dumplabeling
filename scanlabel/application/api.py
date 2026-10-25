@@ -2,7 +2,7 @@
 
 `create_app(dsn, fleet_url)` 이 Store · Fleet 을 하나씩 들고 라우트를 붙인다. 에러 약속:
 ValueError → 422 · KeyError → 404 · NotCached → 422 · FleetUnavailable → 502 · FleetError → 그 status.
-라벨 라우트는 fleet 의 캐시만 읽는다 — FTP 를 일으키지 않는다(`fleet_client`).
+라벨 라우트는 fleet 의 캐시만 읽는다 — FTP 를 일으키지 않는다(`connectors/fleet.py`).
 """
 from __future__ import annotations
 
@@ -16,11 +16,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from . import shape, timebase
-from .fleet_client import FileCache, Fleet, FleetError, FleetUnavailable, NotCached
-from .jobs import pool_rows, run_clusters
-from .store import Store
-from .tree import check_selection
+from .. import timebase
+from ..connectors.fleet import FileCache, Fleet, FleetError, FleetUnavailable, NotCached
+from ..data.repository import Store
+from ..processing import shape
+from ..processing.tree import check_selection
+from .usecases import pool_rows, run_clusters
 
 
 class LabelIn(BaseModel):
@@ -519,7 +520,7 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
 
 
 def __getattr__(name: str):
-    # `uvicorn scanlabel.api:app` — import 만으로 DB 에 붙지 않게 지연 생성 (fleet 과 같은 방식).
+    # `uvicorn scanlabel.application.api:app` — import 만으로 DB 에 붙지 않게 지연 생성 (fleet 과 같은 방식).
     if name == "app":
         global app
         app = create_app()

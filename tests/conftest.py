@@ -12,7 +12,7 @@ import httpx
 import psycopg
 import pytest
 
-from scanlabel import migrate
+from scanlabel.data import migrate
 
 _ENV = "SCANLABEL_TEST_DSN"
 
@@ -91,7 +91,7 @@ def fleet() -> FakeFleet:
 def client(dsn: str, fleet: FakeFleet):
     from fastapi.testclient import TestClient
 
-    from scanlabel.api import create_app
+    from scanlabel.application.api import create_app
 
     app = create_app(dsn, "http://fleet.test", fleet_transport=httpx.MockTransport(fleet.handler))
     with TestClient(app) as c:

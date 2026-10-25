@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scanlabel.jobs import run_eval, seed_labels
-from scanlabel.store import Store
+from scanlabel.application.usecases import run_eval, seed_labels
+from scanlabel.data.repository import Store
 
 from . import synth
 

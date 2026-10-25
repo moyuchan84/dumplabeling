@@ -1,27 +1,18 @@
-"""CLI — `python -m scanlabel.jobs {seed-labels,eval,refeature,index,cluster}`.
+"""유스케이스 — API 와 CLI 가 함께 쓰는 일 (라벨 트리 넣기 · 평가 · 특징 재생성 · 풀 색인 · 묶기).
 
-- `seed-labels FILE` — 대 › 중 › 소 라벨 트리를 넣는다(JSON 또는 CSV). **멱등**: 같은 부모 아래
-  같은 이름이 이미 있으면 그 노드를 쓰고(코드 · 설명 · 사례가 비어 있으면 채운다), 없는 것만 만든다.
-- `eval` — leave-one-out 단계별 적중률 (SPEC.md 「측정」). 스냅샷만 쓰므로 fleet 이 필요 없다.
-- `refeature` — `FEATURE_VERSION` 이 다른 라벨의 특징을 fleet 캐시에서 다시 만든다. 그 세대가
-  fleet 에 없으면 `stale` 로 보고하고 건너뛴다.
-- `index` — fleet 이 해석해 둔 파일을 기록 풀에 넣는다(`/generations` 커서, FTP 없음). 주기 실행용.
-- `cluster` — 기록 풀을 모양으로 다시 묶어 저장한다(화면의 「다시 묶기」와 같은 일).
+HTTP 도 argv 도 모르는 함수들이다: 얇은 어댑터(`api.py` · `jobs.py`)가 이것을 부른다. 순수 계산은
+`processing/`, 저장은 `data/`, fleet 읽기는 `connectors/` 에 있고, 여기서는 그 셋을 엮기만 한다.
 """
 from __future__ import annotations
 
-import argparse
 import csv
 import json
-import os
-import sys
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
-from . import shape
-from .fleet_client import FileScans, Fleet, FleetError, FleetUnavailable, NotCached, Scan, meta_summary
-from .store import Store
-from .tree import LEVEL_NAMES
+from ..connectors.fleet import FileScans, Fleet, FleetError, NotCached, Scan, meta_summary
+from ..data.repository import Store
+from ..processing import shape
 
 
 def _iter_json(nodes: list, parents: tuple = ()) -> Iterator[tuple[tuple, dict]]:
@@ -185,69 +176,3 @@ def run_clusters(store: Store, *, set_name: str) -> dict:
         feature_version=shape.FEATURE_VERSION, maps=maps, points=points)
     return {"run_id": run_id, "records": len(rows), "pool": total, "truncated": truncated,
             "clusters": len(result["clusters"]), "unclustered": len(result["unclustered"])}
-
-
-def _print_eval(res: dict) -> None:
-    print(f"라벨된 기록 {res['labelled']}건 — leave-one-out")
-    print(f"  {'단계':<6} {'n':>4} {'top-1':>8} {'top-3':>8} {'제안':>6} {'제안 적중':>9}")
-    for level, o in res["levels"].items():
-        n = o["n"]
-
-        def pct(x: int, d: int) -> str:
-            return f"{x / d * 100:5.1f}%" if d else "    -"
-        print(f"  {LEVEL_NAMES[level]:<6} {n:>4} {pct(o['top1'], n):>8} {pct(o['top3'], n):>8}"
-              f" {o['suggested']:>6} {pct(o['suggested_right'], o['suggested']):>9}")
-
-
-def _main(argv: Optional[list[str]] = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m scanlabel.jobs")
-    ap.add_argument("--dsn", default=None, help="기본은 $SCANLABEL_DB_DSN")
-    sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("seed-labels", help="라벨 트리 넣기 (JSON | CSV, 멱등)")
-    p.add_argument("file", type=Path)
-    p = sub.add_parser("eval", help="leave-one-out 단계별 적중률")
-    p.add_argument("--set-name", default="dump")
-    p.add_argument("--all-scans", action="store_true", help="스캔 종류가 달라도 비교")
-    p.add_argument("--json", action="store_true")
-    p = sub.add_parser("refeature", help="FEATURE_VERSION 이 다른 라벨의 특징 다시 만들기")
-    p.add_argument("--set-name", default="dump")
-    p.add_argument("--fleet-url", default=os.environ.get("FLEET_API_URL", "http://localhost:8000"))
-    p = sub.add_parser("index", help="fleet 이 해석해 둔 파일을 기록 풀에 넣기 (커서, FTP 없음)")
-    p.add_argument("--set-name", default="dump")
-    p.add_argument("--fleet-url", default=os.environ.get("FLEET_API_URL", "http://localhost:8000"))
-    p.add_argument("--max-files", type=int, default=None, help="이번 실행에서 읽을 파일 수 상한")
-    p = sub.add_parser("cluster", help="기록 풀을 모양으로 다시 묶기")
-    p.add_argument("--set-name", default="dump")
-    args = ap.parse_args(argv)
-
-    dsn = args.dsn or os.environ.get("SCANLABEL_DB_DSN", "")
-    if not dsn:
-        print("error: SCANLABEL_DB_DSN 이 필요하다")
-        return 2
-    store = Store(dsn)
-    try:
-        if args.cmd == "seed-labels":
-            print(json.dumps(seed_labels(store, args.file), ensure_ascii=False))
-        elif args.cmd == "eval":
-            res = run_eval(store, set_name=args.set_name, same_scan_only=not args.all_scans)
-            print(json.dumps(res, ensure_ascii=False, indent=2)) if args.json else _print_eval(res)
-        elif args.cmd == "cluster":
-            print(json.dumps(run_clusters(store, set_name=args.set_name), ensure_ascii=False, indent=2))
-        else:
-            fleet = Fleet(args.fleet_url)
-            try:
-                res = (refeature(store, fleet, set_name=args.set_name) if args.cmd == "refeature"
-                       else index(store, fleet, set_name=args.set_name, max_files=args.max_files))
-                print(json.dumps(res, ensure_ascii=False, indent=2))
-            except FleetUnavailable as exc:
-                print(f"error: {exc}")
-                return 2
-            finally:
-                fleet.close()
-        return 0
-    finally:
-        store.close()
-
-
-if __name__ == "__main__":
-    raise SystemExit(_main(sys.argv[1:]))

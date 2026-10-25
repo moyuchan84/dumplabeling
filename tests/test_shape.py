@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from scanlabel import shape
-from scanlabel.tree import Tree
+from scanlabel.processing import shape
+from scanlabel.processing.tree import Tree
 
 from . import synth
 

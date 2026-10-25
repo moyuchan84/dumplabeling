@@ -5,9 +5,9 @@ from pathlib import Path
 
 import psycopg
 
-from scanlabel.store import Store
+from scanlabel.data.repository import Store
 
-SQL = Path(__file__).resolve().parents[1] / "scanlabel" / "migrations" / "0003_taxonomy_id_0603.sql"
+SQL = Path(__file__).resolve().parents[1] / "scanlabel" / "data" / "migrations" / "0003_taxonomy_id_0603.sql"
 
 
 def apply(dsn: str) -> None:

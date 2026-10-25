@@ -17,7 +17,7 @@ from typing import Optional
 import psycopg
 from psycopg.rows import tuple_row
 
-from . import timebase
+from .. import timebase
 
 _DIR = Path(__file__).parent / "migrations"
 _NAME = re.compile(r"^(\d{4})_([a-z0-9_]+)\.sql$")
@@ -133,7 +133,7 @@ def applied_version(conn) -> int:
 
 
 def _main(argv: Optional[list[str]] = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m scanlabel.migrate")
+    ap = argparse.ArgumentParser(prog="python -m scanlabel.data.migrate")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("up", "status"):
         p = sub.add_parser(name)

@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>scanlabel 아키텍처</title>
+<style>
+:root{
+  --bg:#f6f4ef; --panel:#ffffff; --panel2:#f0ede6; --ink:#1d1b16; --ink2:#4a463c; --ink3:#6b665a;
+  --line:#d9d4c7; --accent:#b45309; --accent2:#0f766e; --code:#efe9db;
+  --viewer:#b45309; --viewer-bg:#fdecd4;
+  --fleet:#1d4ed8; --fleet-bg:#dbe7fe;
+  --label:#0f766e; --label-bg:#d3f1ec;
+  --db:#6d28d9; --db-bg:#e9e0fb;
+  --ext:#57534e; --ext-bg:#e7e5e4;
+  --ok:#15803d; --warn:#b91c1c;
+  --shadow:0 1px 0 rgba(0,0,0,.04),0 6px 20px rgba(60,50,20,.07);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#14130f; --panel:#1d1b16; --panel2:#262319; --ink:#f1ede2; --ink2:#c9c3b3; --ink3:#9a9484;
+    --line:#38342a; --accent:#f59e0b; --accent2:#2dd4bf; --code:#2a2619;
+    --viewer:#f59e0b; --viewer-bg:#3b2a0e;
+    --fleet:#7aa2ff; --fleet-bg:#16264d;
+    --label:#2dd4bf; --label-bg:#0e3330;
+    --db:#b794f6; --db-bg:#2a1f4d;
+    --ext:#d6d3d1; --ext-bg:#2e2b27;
+    --ok:#4ade80; --warn:#f87171;
+    --shadow:0 1px 0 rgba(0,0,0,.4),0 6px 24px rgba(0,0,0,.35);
+  }
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:20px}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.7 "Pretendard","Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",system-ui,sans-serif;}
+code,pre,.mono{font-family:"JetBrains Mono","D2Coding",ui-monospace,Consolas,monospace}
+code{background:var(--code);padding:.08em .38em;border-radius:4px;font-size:.88em}
+a{color:var(--accent2)}
+.layout{display:grid;grid-template-columns:230px minmax(0,1fr);gap:0;max-width:1320px;margin:0 auto}
+nav.toc{position:sticky;top:0;align-self:start;height:100vh;overflow:auto;padding:28px 14px 28px 22px;border-right:1px solid var(--line)}
+nav.toc .brand{font-weight:800;letter-spacing:-.01em;font-size:16px;margin-bottom:2px}
+nav.toc .sub{color:var(--ink3);font-size:12px;margin-bottom:18px}
+nav.toc a{display:block;color:var(--ink2);text-decoration:none;padding:5px 10px;border-radius:6px;font-size:13.5px;border-left:2px solid transparent}
+nav.toc a:hover{background:var(--panel2)}
+nav.toc a.on{color:var(--ink);background:var(--panel2);border-left-color:var(--accent);font-weight:600}
+nav.toc .grp{font-size:11px;letter-spacing:.1em;color:var(--ink3);margin:16px 10px 4px;text-transform:uppercase}
+main{padding:34px 40px 90px;min-width:0}
+header.hero{padding:6px 0 26px;border-bottom:1px solid var(--line);margin-bottom:6px}
+.eyebrow{font-size:12px;letter-spacing:.14em;color:var(--accent);font-weight:700;text-transform:uppercase}
+h1{font-size:34px;line-height:1.2;letter-spacing:-.02em;margin:6px 0 10px}
+.lead{font-size:16.5px;color:var(--ink2);max-width:860px}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12.5px;border:1px solid var(--line);background:var(--panel);color:var(--ink2)}
+.chip i{width:8px;height:8px;border-radius:50%;display:inline-block}
+section{padding-top:34px}
+h2{font-size:23px;letter-spacing:-.01em;margin:0 0 4px;display:flex;align-items:baseline;gap:10px}
+h2 .no{font-family:ui-monospace,Consolas,monospace;font-size:13px;color:var(--accent);background:var(--viewer-bg);padding:1px 8px;border-radius:5px}
+h3{font-size:17px;margin:26px 0 6px}
+p{margin:8px 0}
+.sec-lead{color:var(--ink2);margin:0 0 14px;max-width:880px}
+.grid{display:grid;gap:14px}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media(max-width:1100px){.g3{grid-template-columns:1fr 1fr}}
+@media(max-width:900px){.layout{grid-template-columns:1fr}nav.toc{display:none}main{padding:24px 16px 70px}.g3,.g2{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;box-shadow:var(--shadow)}
+.card h4{margin:0 0 4px;font-size:15.5px}
+.card .role{font-size:12.5px;color:var(--ink3);margin-bottom:8px}
+.card ul{margin:6px 0 0;padding-left:18px}
+.card li{margin:2px 0}
+.bar{height:5px;border-radius:5px;margin:-16px -18px 12px;border-radius:12px 12px 0 0}
+.c-viewer .bar{background:var(--viewer)} .c-fleet .bar{background:var(--fleet)} .c-label .bar{background:var(--label)}
+.k{font-weight:700}
+.callout{border:1px solid var(--line);border-left:4px solid var(--accent);background:var(--panel);border-radius:8px;padding:10px 14px;margin:14px 0}
+.callout.ok{border-left-color:var(--ok)} .callout.warn{border-left-color:var(--warn)} .callout.info{border-left-color:var(--accent2)}
+.callout b.t{display:block;font-size:13px;margin-bottom:2px}
+table{border-collapse:collapse;width:100%;font-size:13.5px;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+th,td{padding:8px 11px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{background:var(--panel2);font-size:12px;letter-spacing:.04em;color:var(--ink2);white-space:nowrap}
+tr:last-child td{border-bottom:0}
+.tw{overflow-x:auto;margin:10px 0}
+td code{white-space:nowrap}
+.tag{display:inline-block;font-size:11.5px;padding:0 7px;border-radius:5px;font-weight:600;white-space:nowrap}
+.t-viewer{background:var(--viewer-bg);color:var(--viewer)} .t-fleet{background:var(--fleet-bg);color:var(--fleet)}
+.t-label{background:var(--label-bg);color:var(--label)} .t-db{background:var(--db-bg);color:var(--db)}
+.t-ext{background:var(--ext-bg);color:var(--ext)}
+pre{background:var(--code);border-radius:8px;padding:12px 14px;overflow:auto;font-size:12.8px;line-height:1.55;margin:10px 0}
+.flow{display:flex;flex-wrap:wrap;align-items:stretch;gap:0;margin:14px 0}
+.step{flex:1 1 150px;min-width:150px;background:var(--panel);border:1px solid var(--line);padding:10px 12px;position:relative;font-size:13px}
+.step + .step{margin-left:14px}
+.step + .step::before{content:"▶";position:absolute;left:-13px;top:50%;transform:translateY(-50%);font-size:11px;color:var(--accent)}
+.step b{display:block;font-size:13.5px;margin-bottom:2px}
+.step .f{display:block;color:var(--ink3);font-size:12px;margin-top:3px}
+.step{border-radius:9px}
+figure{margin:16px 0 8px}
+figcaption{font-size:13px;color:var(--ink3);margin-top:6px}
+.seqwrap,.diagwrap{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px;overflow-x:auto;box-shadow:var(--shadow)}
+svg.seq{width:100%;min-width:760px;height:auto;display:block}
+svg.diag{width:100%;min-width:780px;height:auto;display:block}
+/* svg 공통 */
+svg text{font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",system-ui,sans-serif}
+.life{stroke:var(--line);stroke-width:1.2;stroke-dasharray:4 4}
+.actor{stroke-width:1.4}
+.a-viewer{fill:var(--viewer-bg);stroke:var(--viewer)} .a-fleet{fill:var(--fleet-bg);stroke:var(--fleet)}
+.a-label{fill:var(--label-bg);stroke:var(--label)} .a-db{fill:var(--db-bg);stroke:var(--db)} .a-ext{fill:var(--ext-bg);stroke:var(--ext)}
+.actname{font-size:13.5px;font-weight:700;fill:var(--ink)} .actsub{font-size:11px;fill:var(--ink3)}
+.arr{stroke:var(--ink);stroke-width:1.5;fill:none} .arr.ret{stroke:var(--ink3);stroke-dasharray:5 3}
+.ahf{fill:var(--ink)} .aho{stroke:var(--ink3);stroke-width:1.4}
+.lbl{font-size:12px;fill:var(--ink)} .retlbl{fill:var(--ink3)} .selftxt{text-anchor:start}
+.badge{fill:var(--accent)} .badgetxt{font-size:10.5px;fill:#fff;font-weight:700}
+.sep{fill:var(--panel2);stroke:var(--line)} .septxt{font-size:12px;font-weight:700;fill:var(--ink2)}
+.note{fill:var(--viewer-bg);stroke:var(--viewer);stroke-opacity:.45;stroke-dasharray:3 3}
+.notetxt{font-size:11.8px;fill:var(--ink)}
+/* 아키텍처 도식 */
+.box{stroke-width:1.5}
+.bx-viewer{fill:var(--viewer-bg);stroke:var(--viewer)} .bx-fleet{fill:var(--fleet-bg);stroke:var(--fleet)}
+.bx-label{fill:var(--label-bg);stroke:var(--label)} .bx-db{fill:var(--db-bg);stroke:var(--db)} .bx-ext{fill:var(--ext-bg);stroke:var(--ext)}
+.bx-zone{fill:none;stroke:var(--line);stroke-dasharray:6 5;stroke-width:1.3}
+.bt{font-size:13px;font-weight:700;fill:var(--ink)} .bs{font-size:11.2px;fill:var(--ink2)} .bz{font-size:11px;fill:var(--ink3);font-weight:700;letter-spacing:.08em}
+.ln{stroke:var(--ink);stroke-width:1.6;fill:none} .ln.dash{stroke-dasharray:5 4;stroke:var(--ink3)} .ln.no{stroke:var(--warn);stroke-dasharray:3 3}
+.lt{font-size:11.5px;fill:var(--ink)} .lt2{font-size:11px;fill:var(--ink3)} .ltw{font-size:11.5px;fill:var(--warn);font-weight:700}
+.legend{display:flex;flex-wrap:wrap;gap:14px;margin:10px 2px 0;font-size:12.5px;color:var(--ink2)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:12px;height:12px;border-radius:3px;display:inline-block;border:1.5px solid}
+.dec{border:1px solid var(--line);border-radius:10px;background:var(--panel);margin:10px 0;overflow:hidden}
+.dec summary{cursor:pointer;padding:10px 14px;font-weight:700;font-size:14.5px;list-style:none;display:flex;gap:10px;align-items:center}
+.dec summary::-webkit-details-marker{display:none}
+.dec summary::before{content:"▸";color:var(--accent);transition:transform .15s}
+.dec[open] summary::before{transform:rotate(90deg)}
+.dec summary .id{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--accent);background:var(--viewer-bg);padding:1px 7px;border-radius:5px;font-weight:600}
+.dec .body{padding:0 16px 12px 36px;color:var(--ink2);font-size:14px}
+.dec .body b{color:var(--ink)}
+footer{margin-top:50px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink3);font-size:12.5px}
+.kbd{font-family:ui-monospace,Consolas,monospace;font-size:12px;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:0 6px;background:var(--panel)}
+.tl{list-style:none;padding:0;margin:8px 0}
+.tl li{position:relative;padding:3px 0 3px 22px}
+.tl li::before{content:"";position:absolute;left:4px;top:13px;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.mini{font-size:12.5px;color:var(--ink3)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:900px){.two{grid-template-columns:1fr}}
+@media print{nav.toc{display:none}.layout{display:block}body{background:#fff}.dec:not([open]) .body{display:block}}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc" id="toc">
+  <div class="brand">scanlabel</div>
+  <div class="sub">아키텍처 · 호출 흐름 · 로직</div>
+  <a href="#overview">1. 한눈에 보기</a>
+  <a href="#system">2. 시스템 구성</a>
+  <a href="#deps">3. 종속성</a>
+  <div class="grp">호출 흐름</div>
+  <a href="#seq">4. 시퀀스 다이어그램</a>
+  <a href="#api">5. API 표면</a>
+  <div class="grp">내부 동작</div>
+  <a href="#logic">6. 판단 로직</a>
+  <a href="#data">7. 데이터 모델</a>
+  <a href="#arch">8. 코드 구조</a>
+  <div class="grp">운영</div>
+  <a href="#resilience">9. 장애 · 캐시 · 동시성</a>
+  <a href="#decisions">10. 설계 결정</a>
+  <a href="#ops">11. 실행 · 검증 · 한계</a>
+</nav>
+<main>
+
+<header class="hero">
+  <div class="eyebrow">photo-genic · scanlabel</div>
+  <h1>scanlabel 아키텍처 &amp; 호출 흐름</h1>
+  <p class="lead">dump 스캔 기록 하나하나에 <b>대 › 중 › 소분류 라벨</b>을 붙이고, 화면에 띄운 기록과 <b>모양이 닮은 라벨된 기록</b>을 찾아 라벨을 제안하고,
+  라벨 없는 기록까지 <b>모양으로 묶어(클러스터)</b> 묶음 단위로 분류하게 해 주는 서비스입니다. ftpmodule(fleet)·poc_viewer 와 어떻게 맞물려 돌아가는지 정리했습니다.</p>
+  <div class="meta">
+    <span class="chip"><i style="background:var(--viewer)"></i>poc_viewer — 입력 · 표시 (Next.js)</span>
+    <span class="chip"><i style="background:var(--fleet)"></i>ftpmodule(fleet) — 수집 · 해석 · 서빙</span>
+    <span class="chip"><i style="background:var(--label)"></i>scanlabel — 라벨 · 유사도 · 묶음 판단</span>
+    <span class="chip">기준 커밋 68e1a7e · 테스트 58개 통과</span>
+  </div>
+</header>
+
+<!-- 1 ───────────────────────────── -->
+<section id="overview">
+  <h2><span class="no">01</span>한눈에 보기</h2>
+  <p class="sec-lead">세 프로젝트는 <b>역할이 겹치지 않게</b> 나뉘어 있습니다. 가져와서 해석하는 일은 fleet, 판단하는 일은 scanlabel, 입력받고 보여 주는 일은 poc_viewer 입니다.</p>
+  <div class="grid g3">
+    <div class="card c-fleet"><div class="bar"></div>
+      <h4>ftpmodule (fleet)</h4><div class="role">수집 · 파싱 · 서빙 — Python / FastAPI :8000</div>
+      <ul>
+        <li>장비 FTP 를 스윕해 파일을 미리 받아 해석(<code>name@sig</code> 세대 단위)</li>
+        <li>해석 결과를 PG(TimescaleDB)에 저장, HTTP 로 서빙</li>
+        <li>사례(<code>/cases</code>)·분석(<code>/analyses</code>)의 소유자</li>
+        <li><b>scanlabel 을 모른다</b> — 알 필요도 없다</li>
+      </ul></div>
+    <div class="card c-label"><div class="bar"></div>
+      <h4>scanlabel</h4><div class="role">라벨 · 유사도 · 묶음 판단 — Python / FastAPI :8100</div>
+      <ul>
+        <li>라벨 트리(3단계 고정)와 기록 라벨 저장</li>
+        <li>스캔 곡선 → 특징 → 상관 유사도 → 단계별 제안</li>
+        <li>기록 풀을 모양으로 묶고, 묶음의 분류·2D 지도 계산</li>
+        <li>fleet 은 <b>공개 HTTP · 캐시 전용</b>으로만 읽는다</li>
+      </ul></div>
+    <div class="card c-viewer"><div class="bar"></div>
+      <h4>poc_viewer</h4><div class="role">입력 · 표시 — Next.js 16 / React 19 :3000</div>
+      <ul>
+        <li>Dump 화면의 「사례」 패널: 이 기록 라벨 · 묶음 탭</li>
+        <li>같은 출처 <code>/api/fleet/*</code>, <code>/api/scanlabel/*</code> 로 두 서비스를 부른다</li>
+        <li><b>판단하지 않는다</b> — 점수·문턱·합의 여부는 서버 값을 옮겨 적기만</li>
+        <li>scanlabel 이 죽어도 화면은 죽지 않는다</li>
+      </ul></div>
+  </div>
+  <div class="callout info"><b class="t">핵심 설계 한 줄</b>
+  「ftpmodule 은 데이터를 가져와서 parsing 하는 거 위주였는데 … 별도의 project 를 분기해서」 — 분석(특징·유사도·분류·묶음)은 수집 서비스 안에 넣지 않고 따로 뗐습니다 (<code>SL-ROLE-2</code>, <code>SL-X-1</code>).
+  그래서 scanlabel 은 fleet 의 DB 를 읽지도, 코드를 import 하지도 않으며, fleet 은 scanlabel 의 존재를 모릅니다 (<code>SL-FLEET-1</code>).</div>
+</section>
+
+<!-- 2 ───────────────────────────── -->
+<section id="system">
+  <h2><span class="no">02</span>시스템 구성</h2>
+  <p class="sec-lead">브라우저는 poc_viewer(Next) 한 곳과만 이야기하고, Next 의 <code>rewrites</code> 가 경로 접두어로 두 백엔드에 나눠 전달합니다. 그래서 CORS 가 없습니다.</p>
+  <figure>
+  <div class="diagwrap">
+
+  <svg class="diag" viewBox="0 46 1070 484" role="img" aria-label="시스템 구성도">
+    <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink)"/></marker>
+    <marker id="a2r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--warn)"/></marker></defs>
+
+    <rect class="bx-zone" x="10" y="176" width="226" height="130" rx="12"/><text class="bz" x="24" y="196">사용자 PC</text>
+    <rect class="box bx-viewer" x="28" y="212" width="190" height="72" rx="9"/>
+    <text class="bt" x="123" y="240" text-anchor="middle">브라우저</text><text class="bs" x="123" y="260" text-anchor="middle">poc_viewer 화면 (SWR)</text>
+
+    <rect class="bx-zone" x="260" y="176" width="256" height="130" rx="12"/><text class="bz" x="274" y="196">poc_viewer 서버 :3000</text>
+    <rect class="box bx-viewer" x="278" y="212" width="220" height="72" rx="9"/>
+    <text class="bt" x="388" y="240" text-anchor="middle">Next.js rewrites</text><text class="bs" x="388" y="260" text-anchor="middle">same-origin 프록시 · 서버 로직 없음</text>
+
+    <path class="ln" d="M218,248 H276" marker-end="url(#a2)"/><text class="lt2" x="222" y="240">/api/*</text>
+
+    <path class="ln" d="M498,248 H560 V110 H638" marker-end="url(#a2)"/>
+    <path class="ln" d="M560,248 V370 H638" marker-end="url(#a2)"/>
+    <text class="lt" x="566" y="102">/api/scanlabel</text>
+    <text class="lt" x="566" y="362">/api/fleet</text>
+
+    <rect class="box bx-label" x="640" y="58" width="220" height="104" rx="9"/>
+    <text class="bt" x="750" y="84" text-anchor="middle">scanlabel API :8100</text><text class="bs" x="750" y="106" text-anchor="middle">라벨 트리 · 특징 · 유사도</text><text class="bs" x="750" y="124" text-anchor="middle">제안 · 묶음 · 지도</text><text class="bs" x="750" y="142" text-anchor="middle">FastAPI · psycopg · httpx</text>
+    <rect class="box bx-fleet" x="640" y="318" width="220" height="104" rx="9"/>
+    <text class="bt" x="750" y="344" text-anchor="middle">fleet API :8000</text><text class="bs" x="750" y="366" text-anchor="middle">items · list · generations</text><text class="bs" x="750" y="384" text-anchor="middle">cases · analyses · spec</text><text class="bs" x="750" y="402" text-anchor="middle">FastAPI (ftpmodule)</text>
+
+    <rect class="box bx-db" x="912" y="68" width="148" height="84" rx="9"/>
+    <text class="bt" x="986" y="94" text-anchor="middle">scanlabel DB</text><text class="bs" x="986" y="114" text-anchor="middle">PostgreSQL</text><text class="bs" x="986" y="132" text-anchor="middle">마이그레이션 0001–0004</text>
+    <rect class="box bx-db" x="912" y="328" width="148" height="84" rx="9"/>
+    <text class="bt" x="986" y="354" text-anchor="middle">fleet DB</text><text class="bs" x="986" y="374" text-anchor="middle">PostgreSQL</text><text class="bs" x="986" y="392" text-anchor="middle">+ TimescaleDB</text>
+    <path class="ln" d="M862,110 H910" marker-end="url(#a2)"/><text class="lt2" x="866" y="102">SQL</text>
+    <path class="ln" d="M862,370 H910" marker-end="url(#a2)"/><text class="lt2" x="866" y="362">SQL</text>
+
+    <path class="ln" d="M750,164 V316" marker-end="url(#a2)"/>
+    <text class="lt" x="762" y="228">HTTP 호출 — source:"cache"</text><text class="lt2" x="762" y="246">fleet 이 이미 해석해 둔 세대만 (FTP 0회)</text>
+    <path class="ln no" d="M986,154 V326" marker-end="url(#a2r)"/>
+    <text class="ltw" x="978" y="262" text-anchor="end">✕ DB 직접 읽기</text><text class="ltw" x="978" y="280" text-anchor="end">· import 금지</text>
+
+    <rect class="box bx-fleet" x="912" y="456" width="148" height="62" rx="9"/>
+    <text class="bt" x="986" y="482" text-anchor="middle">스윕 · 실시간 수집</text><text class="bs" x="986" y="502" text-anchor="middle">관측→수신→해석→저장</text>
+    <path class="ln" d="M986,454 V414" marker-end="url(#a2)"/><text class="lt2" x="994" y="440">저장</text>
+    <rect class="box bx-ext" x="640" y="456" width="220" height="62" rx="9"/>
+    <text class="bt" x="750" y="482" text-anchor="middle">장비 FTP 서버들</text><text class="bs" x="750" y="502" text-anchor="middle">dump · focal · overlay …</text>
+    <path class="ln" d="M910,487 H862" marker-end="url(#a2)"/><text class="lt2" x="870" y="478">FTP</text>
+
+    <rect class="box bx-ext" x="20" y="334" width="496" height="176" rx="10"/>
+    <text class="bt" x="38" y="362">경계 규칙 (SPEC SL-FLEET · SL-ROLE)</text>
+    <text class="bs" x="38" y="388">① fleet 공개 HTTP API 로만 읽는다 — fleet DB·코드 접근 금지</text>
+    <text class="bs" x="38" y="410">② 아이템 실행은 항상 source:"cache" — FTP 를 일으키지 않는다</text>
+    <text class="bs" x="38" y="432">③ 장비는 servername 으로 식별 (server_id 는 링크용)</text>
+    <text class="bs" x="38" y="454">④ 레코드는 구조(xyz+value / results)로 구분, kind 문자열 금지</text>
+    <text class="bs" x="38" y="476">⑤ 판단은 scanlabel, poc_viewer 는 서버 값을 옮겨 적기만</text>
+    <text class="bs" x="38" y="498">⑥ fleet 은 scanlabel 의 존재를 모른다 (역방향 호출 없음)</text>
+  </svg>
+
+  </div>
+  <figcaption>실선 화살표 = 호출 방향. 점선 영역 = 프로세스/서비스 경계. 개발 중에는 poc_viewer <code>npm run mock</code>(:8787)이 fleet·scanlabel 을 모두 흉내 낼 수 있습니다.</figcaption>
+  </figure>
+
+  <h3>누가 무엇을 소유하는가</h3>
+  <div class="tw"><table>
+    <tr><th>대상</th><th>소유</th><th>비고</th></tr>
+    <tr><td>장비 원본 파일 · 해석 결과(<code>name@sig</code>)</td><td><span class="tag t-fleet">fleet</span></td><td>장비에서 사라져도 남음. 지우는 건 운영자 <code>prune</code> 뿐</td></tr>
+    <tr><td>사례 <code>acs_case</code> · 파일 분석 <code>acs_analysis</code></td><td><span class="tag t-fleet">fleet</span></td><td>scanlabel 은 <code>case_id</code> 만 소프트 참조 (DB 간 조인 없음, <code>SL-CASE-3</code>)</td></tr>
+    <tr><td>라벨 트리 · 기록 라벨 · 특징 스냅샷 · 기록 풀 · 묶음 결과</td><td><span class="tag t-label">scanlabel</span></td><td>fleet 캐시가 정리돼도 라벨은 살아남도록 특징 스냅샷을 같이 저장 (<code>SL-LBL-6</code>)</td></tr>
+    <tr><td>점수 · 확실 여부 · 묶음 합의 · 지도 좌표</td><td><span class="tag t-label">scanlabel</span></td><td>문턱값은 <code>processing/shape.py</code> 상수 한 곳에만</td></tr>
+    <tr><td>입력 UI · 초안 · 표시 · 폴링 주기</td><td><span class="tag t-viewer">poc_viewer</span></td><td>점수·문턱을 화면에 두지 않는다 (<code>DUMP-SIM-1</code>)</td></tr>
+  </table></div>
+</section>
+
+<!-- 3 ───────────────────────────── -->
+<section id="deps">
+  <h2><span class="no">03</span>종속성</h2>
+  <p class="sec-lead">세 층위로 봅니다: ① 프로젝트 간 런타임 의존, ② 각 프로젝트 안의 모듈 의존 방향, ③ 외부 라이브러리.</p>
+
+  <h3>① 프로젝트 간 의존 (런타임)</h3>
+  <div class="tw"><table>
+    <tr><th>호출하는 쪽</th><th>→</th><th>받는 쪽</th><th>사용하는 표면</th><th>실패하면</th></tr>
+    <tr><td><span class="tag t-viewer">poc_viewer</span></td><td>→</td><td><span class="tag t-fleet">fleet</span></td><td><code>/servers</code> · <code>/list</code> · <code>/servers/{id}/items/*</code> · <code>/cases</code> · <code>/analyses</code> · <code>/generations</code></td><td>그래프 · 파일 목록 자체가 막힘 (본 기능)</td></tr>
+    <tr><td><span class="tag t-viewer">poc_viewer</span></td><td>→</td><td><span class="tag t-label">scanlabel</span></td><td><code>/label-defs</code> · <code>/labels</code> · <code>/labels/similar</code> · <code>/labels/by-case</code> · <code>/clusters*</code> · <code>/records/{id}</code></td><td><b>라벨 탭만</b> ErrorNote — 나머지 화면은 그대로 (<code>DUMP-LBL-9</code>)</td></tr>
+    <tr><td><span class="tag t-label">scanlabel</span></td><td>→</td><td><span class="tag t-fleet">fleet</span></td><td><code>GET /servers</code> · <code>GET /generations</code> · <code>POST /servers/{id}/items/{set}</code> (<code>source:"cache"</code>)</td><td>502 (닿지 않음) · 422 "먼저 Dump 화면에서 파일을 열어 달라" (해석 결과 없음) · 404</td></tr>
+    <tr><td><span class="tag t-fleet">fleet</span></td><td>→</td><td><span class="tag t-label">scanlabel</span></td><td colspan="2"><b>없음.</b> fleet 은 scanlabel 을 모른다.</td></tr>
+    <tr><td><span class="tag t-fleet">fleet</span></td><td>→</td><td><span class="tag t-ext">장비 FTP</span></td><td>스윕 · 실시간 · 라이브 보충(<code>source:auto/live</code>)</td><td>scanlabel 은 <code>cache</code> 만 쓰므로 영향을 받지 않음</td></tr>
+  </table></div>
+  <div class="callout ok"><b class="t">왜 한 방향 + 캐시 전용인가</b>
+  scanlabel 이 FTP 를 일으키면 장비의 연결 슬롯(<code>max_sessions</code>)을 두고 수집과 다투게 됩니다. <code>source:"cache"</code> 는 "fleet 이 이미 해석해 둔 세대만 답하라"는 계약이라 FTP 가 0회임이 보장됩니다 (<code>SL-FLEET-2</code>).
+  대신 fleet 이 아직 해석하지 않은 파일은 읽을 수 없고, 이 때문에 화면에서 한 번 열어 본(= fleet 이 받아 둔) 파일만 즉시 라벨 대상이 됩니다.</div>
+
+  <h3>② 프로젝트 안의 모듈 의존 방향</h3>
+  <div class="two">
+    <div>
+      <figure><div class="diagwrap">
+      <svg class="diag" viewBox="0 0 470 330" style="min-width:420px" role="img" aria-label="scanlabel 영역 의존">
+        <defs><marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink)"/></marker></defs>
+        <rect class="box bx-label" x="120" y="16" width="230" height="74" rx="9"/>
+        <text class="bt" x="235" y="40" text-anchor="middle">application</text>
+        <text class="bs" x="235" y="58" text-anchor="middle">usecases · api · jobs</text><text class="bs" x="235" y="74" text-anchor="middle">(유일하게 셋을 엮는 곳)</text>
+        <rect class="box bx-db" x="20" y="150" width="190" height="74" rx="9"/>
+        <text class="bt" x="115" y="174" text-anchor="middle">data</text><text class="bs" x="115" y="192" text-anchor="middle">repository(Store) · migrate</text><text class="bs" x="115" y="208" text-anchor="middle">migrations/*.sql</text>
+        <rect class="box bx-fleet" x="260" y="150" width="190" height="74" rx="9"/>
+        <text class="bt" x="355" y="174" text-anchor="middle">connectors</text><text class="bs" x="355" y="192" text-anchor="middle">fleet.py</text><text class="bs" x="355" y="208" text-anchor="middle">fleet HTTP 의 유일한 문</text>
+        <rect class="box bx-viewer" x="20" y="262" width="190" height="52" rx="9"/>
+        <text class="bt" x="115" y="286" text-anchor="middle">processing</text><text class="bs" x="115" y="303" text-anchor="middle">shape · tree (표준 라이브러리만)</text>
+        <rect class="box bx-ext" x="260" y="262" width="190" height="52" rx="9"/>
+        <text class="bt" x="355" y="286" text-anchor="middle">timebase</text><text class="bs" x="355" y="303" text-anchor="middle">시계 읽기는 여기 한 곳</text>
+        <line class="ln" x1="170" y1="90" x2="130" y2="148" marker-end="url(#a4)"/>
+        <line class="ln" x1="300" y1="90" x2="340" y2="148" marker-end="url(#a4)"/>
+        <line class="ln" x1="115" y1="224" x2="115" y2="260" marker-end="url(#a4)"/>
+        <line class="ln dash" x1="210" y1="200" x2="258" y2="284" marker-end="url(#a4)"/>
+        <path class="ln dash" d="M235,90 L235,120 L24,120 L24,148" fill="none"/>
+      </svg></div>
+      <figcaption>화살표 = import 방향(위가 아래를 쓴다). <code>tests/test_architecture.py</code> 가 위반을 실패시킵니다.</figcaption></figure>
+    </div>
+    <div>
+      <div class="tw"><table>
+        <tr><th>영역</th><th>import 해도 되는 것</th></tr>
+        <tr><td><code>processing</code></td><td>표준 라이브러리 + 자기 자신 (DB·HTTP·시계 금지) — allowlist 검사</td></tr>
+        <tr><td><code>connectors</code></td><td>다른 영역 전부 금지</td></tr>
+        <tr><td><code>data</code></td><td><code>processing</code> · <code>timebase</code> 만 (connectors·application 금지)</td></tr>
+        <tr><td><code>application</code></td><td>위 셋 전부. 단 <code>api.py</code> ↔ <code>jobs.py</code> 서로 import 금지 — 공용은 <code>usecases.py</code></td></tr>
+        <tr><td>벽시계</td><td><code>timebase.py</code> 외에서 <code>datetime.now</code> 등 읽기 금지</td></tr>
+      </table></div>
+      <p class="mini">원래 <code>api.py</code> 가 <code>jobs.py</code> 의 함수를 import 했던 것을 2026-10-19 에 <code>usecases.py</code> 로 뺐습니다 (<code>SL-ARCH-2</code>). 이번 구조화는 파일 이동만 — 테이블·컬럼·마이그레이션 체크섬은 그대로입니다 (<code>SL-ARCH-4</code>).</p>
+    </div>
+  </div>
+
+  <h3>poc_viewer 쪽 의존 (scanlabel 관련)</h3>
+  <div class="two">
+    <div class="tw"><table>
+      <tr><th>위치</th><th>역할</th></tr>
+      <tr><td><code>next.config.ts</code></td><td><code>/api/scanlabel/:path*</code> → <code>$SCANLABEL_API_URL</code> (기본 :8100). 순서상 <code>/api/fleet</code> 보다 먼저 매칭</td></tr>
+      <tr><td><code>src/core/api.ts</code></td><td>fetch 래퍼. 호출마다 <code>base</code> 접두어를 받음 — fleet 의 오류 문구를 scanlabel 에 빌려주지 않음</td></tr>
+      <tr><td><code>src/core/labels.ts</code></td><td>scanlabel HTTP 계약의 TS 번역: 타입 · SWR 훅 · 변경 함수 · <code>revalidateLabels()</code>. React UI 없음</td></tr>
+      <tr><td><code>case-panel/LabelForm.tsx</code></td><td>「이 기록 라벨」 탭 — 라벨 고르기 · 제안 · 유사 사례 · 묶음 · 유사 기록</td></tr>
+      <tr><td><code>case-panel/ClusterBrowser.tsx</code></td><td>「묶음」 탭 — 목록 · 2D 지도 · 상세 · 일괄 붙이기 · 다시 묶기</td></tr>
+      <tr><td><code>case-panel/CaseBrowser.tsx</code></td><td>사례 상세에서 <code>/labels/by-case</code> 로 거꾸로 기록 찾기</td></tr>
+      <tr><td><code>case-panel/labels.ts</code></td><td>순수 함수(검색 · 선택 규칙) — <code>labels.test.ts</code> 가 보호</td></tr>
+      <tr><td><code>ScanDashboard.tsx</code></td><td>기록 행의 ◆ 라벨 / ◇ 제안 표식</td></tr>
+      <tr><td><code>mock/labels-mock.mjs</code></td><td>scanlabel 없이 개발하는 목 (:8787)</td></tr>
+    </table></div>
+    <div>
+      <div class="callout"><b class="t">poc_viewer 의 의존 규칙 (eslint 로 강제)</b>
+      <code>app → home · status · lab · core · viewers</code>, <code>viewers → core · items</code>, <code>core</code> 는 위를 모른다.
+      scanlabel 용 코드는 <code>core/labels.ts</code>(HTTP 계약)에 있고, 어느 화면이 보여 줄지는 scan-dashboard 의 <code>case-panel/</code> 이 정합니다.
+      뷰어끼리는 서로 import 하지 않습니다.</div>
+      <div class="callout info"><b class="t">원칙 — 화면은 옮겨 적기만</b>
+      <code>suggested</code> · <code>agreed</code> · <code>score</code> 는 전부 서버의 판단입니다. 프런트에 문턱값을 넣는 것은 금지입니다 (<code>SL-ROLE-3</code>, CLAUDE.md "Do not add a threshold to the front end").
+      첫 판에 "갈림"이라 적었다가 "문턱 아래" 와 구분이 안 돼 「확실하지 않음」으로 고친 사례가 이 원칙의 이유입니다 (<code>DUMP-SIM-2</code>).</div>
+    </div>
+  </div>
+
+  <h3>③ 외부 라이브러리 · 런타임</h3>
+  <div class="tw"><table>
+    <tr><th>프로젝트</th><th>런타임 · 프레임워크</th><th>데이터 저장</th><th>특이사항</th></tr>
+    <tr><td><span class="tag t-label">scanlabel</span></td><td>Python · FastAPI 0.143 · uvicorn 0.54 · httpx 0.28</td><td>PostgreSQL (psycopg 3.3 pool, raw SQL, ORM 없음)</td><td><b>numpy · pgvector 없음</b> — <code>math.sumprod</code> 로 800건 ≈ 6초. 테스트 pytest 9</td></tr>
+    <tr><td><span class="tag t-fleet">fleet</span></td><td>Python · FastAPI ≥0.110 · uvicorn · psycopg ≥3.2 · boto3(S3 아카이브)</td><td>PostgreSQL + <b>TimescaleDB</b> (시계열 하이퍼테이블)</td><td>FTP 커넥터 · 스윕 스케줄러 · 서버 슬롯(lease). 마이그레이션 forward-only</td></tr>
+    <tr><td><span class="tag t-viewer">poc_viewer</span></td><td>Next 16.2.10 · React 19.2.4 · TypeScript 5 · Tailwind 4</td><td>없음 (노트만 localStorage)</td><td>SWR 2 · ECharts 5 / echarts-gl · vitest 4. 디자인 토큰 단일 출처 CSS</td></tr>
+  </table></div>
+  <p class="mini">scanlabel 과 fleet 은 같은 규칙으로 마이그레이션을 돌리지만 <b>코드는 공유하지 않습니다</b> (advisory lock 키도 달라 한 PG 인스턴스에 두 DB 가 공존할 수 있음).</p>
+</section>
+
+<!-- 4 ───────────────────────────── -->
+<section id="seq">
+  <h2><span class="no">04</span>시퀀스 다이어그램</h2>
+  <p class="sec-lead">실제 코드(<code>application/api.py</code> · <code>usecases.py</code> · <code>connectors/fleet.py</code> · <code>core/labels.ts</code>)를 따라 그렸습니다. 번호 ● 는 호출 순서, 점선은 응답입니다.</p>
+
+  <h3>S1. 재료가 만들어지는 길 — 장비 → fleet 캐시 → 화면</h3>
+  <p class="mini">scanlabel 이 읽는 "캐시"가 어디서 오는지. scanlabel 은 ②의 결과(이미 해석된 세대)만 씁니다.</p>
+  <div class="seqwrap"><svg class="seq" viewBox="0 0 1062 505" role="img" preserveAspectRatio="xMinYMin meet"><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ahf"/></marker><marker id="ah-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M1,1 L9,5 L1,9" fill="none" class="aho"/></marker></defs><line class="life" x1="119.0" y1="52" x2="119.0" y2="499"/><rect class="actor a-ext" x="30.0" y="8" width="178" height="44" rx="7"/><text class="actname" x="119.0" y="27" text-anchor="middle">장비 FTP</text><text class="actsub" x="119.0" y="43" text-anchor="middle">dump 파일 원본</text><line class="life" x1="325.0" y1="52" x2="325.0" y2="499"/><rect class="actor a-fleet" x="236.0" y="8" width="178" height="44" rx="7"/><text class="actname" x="325.0" y="27" text-anchor="middle">fleet 스윕</text><text class="actsub" x="325.0" y="43" text-anchor="middle">선행 수집 · 해석</text><line class="life" x1="531.0" y1="52" x2="531.0" y2="499"/><rect class="actor a-db" x="442.0" y="8" width="178" height="44" rx="7"/><text class="actname" x="531.0" y="27" text-anchor="middle">fleet DB</text><text class="actsub" x="531.0" y="43" text-anchor="middle">PG + TimescaleDB</text><line class="life" x1="737.0" y1="52" x2="737.0" y2="499"/><rect class="actor a-viewer" x="648.0" y="8" width="178" height="44" rx="7"/><text class="actname" x="737.0" y="27" text-anchor="middle">브라우저</text><text class="actsub" x="737.0" y="43" text-anchor="middle">poc_viewer 화면</text><line class="life" x1="943.0" y1="52" x2="943.0" y2="499"/><rect class="actor a-fleet" x="854.0" y="8" width="178" height="44" rx="7"/><text class="actname" x="943.0" y="27" text-anchor="middle">fleet API</text><text class="actsub" x="943.0" y="43" text-anchor="middle">:8000 · ftpmodule</text><rect class="sep" x="6" y="64" width="1050" height="22" rx="4"/><text class="septxt" x="531.0" y="79" text-anchor="middle">① 장비 쪽 — 사람이 보기 전에 fleet 이 미리 받아 해석해 둔다 (스윕)</text><text class="lbl" x="222.0" y="108" text-anchor="middle">목록 관측 (크기 · 수정시각)</text><text class="lbl" x="222.0" y="122" text-anchor="middle">연속 2주기 같으면 '수신 가능'</text><line class="arr" x1="322.0" y1="135" x2="122.0" y2="135" marker-end="url(#ah)"/><circle class="badge" cx="314.0" cy="135" r="7.5"/><text class="badgetxt" x="314.0" y="138.6" text-anchor="middle">1</text><text class="lbl retlbl" x="222.0" y="155" text-anchor="middle">파일 내용</text><line class="arr ret" x1="122.0" y1="168" x2="322.0" y2="168" marker-end="url(#ah-open)"/><path class="arr" d="M328.0,188 h26 v32 h-26" fill="none" marker-end="url(#ah)"/><text class="lbl selftxt" x="361.0" y="200">dump 해석</text><text class="lbl selftxt" x="361.0" y="214">raw 스캔(xyz+value) · meta(results,pair)</text><circle class="badge" cx="328.0" cy="188" r="7.5"/><text class="badgetxt" x="328.0" y="191.6" text-anchor="middle">2</text><text class="lbl" x="428.0" y="238" text-anchor="middle">해석 행 저장 — 파일 정체성 = name@sig</text><line class="arr" x1="328.0" y1="251" x2="528.0" y2="251" marker-end="url(#ah)"/><circle class="badge" cx="336.0" cy="251" r="7.5"/><text class="badgetxt" x="336.0" y="254.6" text-anchor="middle">3</text><rect class="note" x="6" y="261" width="445.9680000000001" height="25" rx="5"/><text class="notetxt" x="16" y="275">장비에서 파일이 사라져도 fleet 데이터는 남는다 (운영자 prune 만 삭제)</text><rect class="sep" x="6" y="290" width="1050" height="22" rx="4"/><text class="septxt" x="531.0" y="305" text-anchor="middle">② 화면 쪽 — 파일을 고르면 poc_viewer 가 fleet 에 아이템을 요청한다</text><text class="lbl" x="840.0" y="334" text-anchor="middle">POST /api/fleet/servers/{id}/items/dump</text><text class="lbl" x="840.0" y="348" text-anchor="middle">files:[name]  (Next rewrite)</text><line class="arr" x1="740.0" y1="361" x2="940.0" y2="361" marker-end="url(#ah)"/><circle class="badge" cx="748.0" cy="361" r="7.5"/><text class="badgetxt" x="748.0" y="364.6" text-anchor="middle">4</text><text class="lbl" x="737.0" y="381" text-anchor="middle">해당 세대의 캐시 행 조회</text><line class="arr" x1="940.0" y1="394" x2="534.0" y2="394" marker-end="url(#ah)"/><circle class="badge" cx="932.0" cy="394" r="7.5"/><text class="badgetxt" x="932.0" y="397.6" text-anchor="middle">5</text><text class="lbl retlbl" x="840.0" y="414" text-anchor="middle">records[] + served[{file, sig}] + issues[]</text><line class="arr ret" x1="940.0" y1="427" x2="740.0" y2="427" marker-end="url(#ah-open)"/><rect class="note" x="551.0319999999999" y="437" width="504.9680000000001" height="40" rx="5"/><text class="notetxt" x="561.0319999999999" y="451">→ 그래프가 그려진다. 이 시점에 fleet 은 이 파일의 해석 결과를 이미 가지고 있다.</text><text class="notetxt" x="561.0319999999999" y="466">scanlabel 이 'source: cache' 로만 읽을 수 있는 전제가 이것이다.</text></svg></div>
+
+  <h3>S2. 파일을 열 때 — 라벨 트리 · 라벨된 기록 ◆ · 기록별 제안 ◇</h3>
+  <p class="mini">화면이 파일을 보여 주는 순간 <code>POST /labels/similar</code>(source 없음)가 불립니다. 이 호출은 <b>그 파일의 모든 기록을 기록 풀에 넣는 부수효과</b>도 가집니다 (<code>SL-POOL-1</code>).</p>
+  <div class="seqwrap"><svg class="seq" viewBox="0 0 960 688" role="img" preserveAspectRatio="xMinYMin meet"><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ahf"/></marker><marker id="ah-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M1,1 L9,5 L1,9" fill="none" class="aho"/></marker></defs><line class="life" x1="132.0" y1="52" x2="132.0" y2="682"/><rect class="actor a-viewer" x="30.0" y="8" width="204" height="44" rx="7"/><text class="actname" x="132.0" y="27" text-anchor="middle">브라우저</text><text class="actsub" x="132.0" y="43" text-anchor="middle">poc_viewer 화면</text><line class="life" x1="364.0" y1="52" x2="364.0" y2="682"/><rect class="actor a-label" x="262.0" y="8" width="204" height="44" rx="7"/><text class="actname" x="364.0" y="27" text-anchor="middle">scanlabel API</text><text class="actsub" x="364.0" y="43" text-anchor="middle">:8100 · FastAPI</text><line class="life" x1="596.0" y1="52" x2="596.0" y2="682"/><rect class="actor a-fleet" x="494.0" y="8" width="204" height="44" rx="7"/><text class="actname" x="596.0" y="27" text-anchor="middle">fleet API</text><text class="actsub" x="596.0" y="43" text-anchor="middle">:8000 · ftpmodule</text><line class="life" x1="828.0" y1="52" x2="828.0" y2="682"/><rect class="actor a-db" x="726.0" y="8" width="204" height="44" rx="7"/><text class="actname" x="828.0" y="27" text-anchor="middle">scanlabel DB</text><text class="actsub" x="828.0" y="43" text-anchor="middle">PostgreSQL</text><rect class="note" x="30.0" y="68" width="900.0" height="25" rx="5"/><text class="notetxt" x="40.0" y="82">화면이 파일을 보여 줄 때 SWR 훅 3개가 같이 일어난다: useLabelDefs · useFileLabels · useFileSuggestions</text><text class="lbl" x="248.0" y="111" text-anchor="middle">GET /label-defs  (트리, 평평한 목록)</text><line class="arr" x1="135.0" y1="124" x2="361.0" y2="124" marker-end="url(#ah)"/><circle class="badge" cx="143.0" cy="124" r="7.5"/><text class="badgetxt" x="143.0" y="127.6" text-anchor="middle">1</text><text class="lbl" x="596.0" y="144" text-anchor="middle">label_defs 조회</text><line class="arr" x1="367.0" y1="157" x2="825.0" y2="157" marker-end="url(#ah)"/><circle class="badge" cx="375.0" cy="157" r="7.5"/><text class="badgetxt" x="375.0" y="160.6" text-anchor="middle">2</text><text class="lbl retlbl" x="248.0" y="177" text-anchor="middle">defs[] (count, count_total 포함)</text><line class="arr ret" x1="361.0" y1="190" x2="135.0" y2="190" marker-end="url(#ah-open)"/><text class="lbl" x="248.0" y="210" text-anchor="middle">GET /labels?server_id&amp;name  (이 파일의 라벨된 기록)</text><line class="arr" x1="135.0" y1="223" x2="361.0" y2="223" marker-end="url(#ah)"/><circle class="badge" cx="143.0" cy="223" r="7.5"/><text class="badgetxt" x="143.0" y="226.6" text-anchor="middle">3</text><text class="lbl retlbl" x="248.0" y="243" text-anchor="middle">labels[] — 행의 ◆ 표식</text><line class="arr ret" x1="361.0" y1="256" x2="135.0" y2="256" marker-end="url(#ah-open)"/><text class="lbl" x="248.0" y="286" text-anchor="middle">POST /labels/similar</text><text class="lbl" x="248.0" y="300" text-anchor="middle">{server_id, set_name, name}  ← source 없음</text><line class="arr" x1="135.0" y1="313" x2="361.0" y2="313" marker-end="url(#ah)"/><circle class="badge" cx="143.0" cy="313" r="7.5"/><text class="badgetxt" x="143.0" y="316.6" text-anchor="middle">4</text><text class="lbl" x="480.0" y="333" text-anchor="middle">GET /servers  → servername (60초 캐시)</text><line class="arr" x1="367.0" y1="346" x2="593.0" y2="346" marker-end="url(#ah)"/><circle class="badge" cx="375.0" cy="346" r="7.5"/><text class="badgetxt" x="375.0" y="349.6" text-anchor="middle">5</text><text class="lbl" x="480.0" y="366" text-anchor="middle">POST /servers/{id}/items/dump</text><text class="lbl" x="480.0" y="380" text-anchor="middle">{files:[name], source:"cache"}  — FTP 0회</text><line class="arr" x1="367.0" y1="393" x2="593.0" y2="393" marker-end="url(#ah)"/><circle class="badge" cx="375.0" cy="393" r="7.5"/><text class="badgetxt" x="375.0" y="396.6" text-anchor="middle">6</text><text class="lbl retlbl" x="480.0" y="413" text-anchor="middle">records[] + served[].sig</text><line class="arr ret" x1="593.0" y1="426" x2="367.0" y2="426" marker-end="url(#ah-open)"/><path class="arr" d="M367.0,446 h26 v32 h-26" fill="none" marker-end="url(#ah)"/><text class="lbl selftxt" x="400.0" y="458">구조로 짝짓기: xyz+value = raw, results = meta</text><text class="lbl selftxt" x="400.0" y="472">record_features() — 채널마다 128점 · 16×16 격자</text><circle class="badge" cx="367.0" cy="446" r="7.5"/><text class="badgetxt" x="367.0" y="449.6" text-anchor="middle">7</text><text class="lbl" x="596.0" y="496" text-anchor="middle">scan_records upsert (기록 풀에 넣기)</text><line class="arr" x1="367.0" y1="509" x2="825.0" y2="509" marker-end="url(#ah)"/><circle class="badge" cx="375.0" cy="509" r="7.5"/><text class="badgetxt" x="375.0" y="512.6" text-anchor="middle">8</text><text class="lbl" x="596.0" y="529" text-anchor="middle">라벨된 후보 · 라벨 트리 조회</text><line class="arr" x1="367.0" y1="542" x2="825.0" y2="542" marker-end="url(#ah)"/><circle class="badge" cx="375.0" cy="542" r="7.5"/><text class="badgetxt" x="375.0" y="545.6" text-anchor="middle">9</text><path class="arr" d="M367.0,562 h26 v32 h-26" fill="none" marker-end="url(#ah)"/><text class="lbl selftxt" x="400.0" y="574">기록마다 rank(): 같은 scan_enum 의 후보와 비교</text><text class="lbl selftxt" x="400.0" y="588">단계별 '확실' 판정 → 가장 깊은 확실 단계</text><circle class="badge" cx="367.0" cy="562" r="7.5"/><text class="badgetxt" x="367.0" y="565.6" text-anchor="middle">10</text><text class="lbl retlbl" x="248.0" y="612" text-anchor="middle">{sig, records:[{source, suggestion 또는 null}]}</text><line class="arr ret" x1="361.0" y1="625" x2="135.0" y2="625" marker-end="url(#ah-open)"/><rect class="note" x="6" y="635" width="514.4080000000001" height="25" rx="5"/><text class="notetxt" x="16" y="649">행의 ◇ 제안 표식. 문턱값은 화면이 모른다 — suggested 는 서버 판단을 옮겨 적을 뿐</text></svg></div>
+
+  <h3>S3. 기록 하나를 눌렀을 때 — 이 기록 라벨 탭</h3>
+  <div class="seqwrap"><svg class="seq" viewBox="0 0 960 487" role="img" preserveAspectRatio="xMinYMin meet"><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ahf"/></marker><marker id="ah-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M1,1 L9,5 L1,9" fill="none" class="aho"/></marker></defs><line class="life" x1="132.0" y1="52" x2="132.0" y2="481"/><rect class="actor a-viewer" x="30.0" y="8" width="204" height="44" rx="7"/><text class="actname" x="132.0" y="27" text-anchor="middle">브라우저</text><text class="actsub" x="132.0" y="43" text-anchor="middle">poc_viewer 화면</text><line class="life" x1="364.0" y1="52" x2="364.0" y2="481"/><rect class="actor a-label" x="262.0" y="8" width="204" height="44" rx="7"/><text class="actname" x="364.0" y="27" text-anchor="middle">scanlabel API</text><text class="actsub" x="364.0" y="43" text-anchor="middle">:8100 · FastAPI</text><line class="life" x1="596.0" y1="52" x2="596.0" y2="481"/><rect class="actor a-fleet" x="494.0" y="8" width="204" height="44" rx="7"/><text class="actname" x="596.0" y="27" text-anchor="middle">fleet API</text><text class="actsub" x="596.0" y="43" text-anchor="middle">:8000 · ftpmodule</text><line class="life" x1="828.0" y1="52" x2="828.0" y2="481"/><rect class="actor a-db" x="726.0" y="8" width="204" height="44" rx="7"/><text class="actname" x="828.0" y="27" text-anchor="middle">scanlabel DB</text><text class="actsub" x="828.0" y="43" text-anchor="middle">PostgreSQL</text><rect class="note" x="30.0" y="68" width="900.0" height="25" rx="5"/><text class="notetxt" x="40.0" y="82">기록 한 줄을 누르고 「이 기록 라벨」 탭을 연다  (useSimilar → source 포함)</text><text class="lbl" x="248.0" y="111" text-anchor="middle">POST /labels/similar</text><text class="lbl" x="248.0" y="125" text-anchor="middle">{server_id, set_name, name, source, k:10, same_scan_only:true}</text><line class="arr" x1="135.0" y1="138" x2="361.0" y2="138" marker-end="url(#ah)"/><circle class="badge" cx="143.0" cy="138" r="7.5"/><text class="badgetxt" x="143.0" y="141.6" text-anchor="middle">1</text><text class="lbl" x="480.0" y="158" text-anchor="middle">FileCache 적중이면 생략 (8개 · 120초)</text><text class="lbl" x="480.0" y="172" text-anchor="middle">아니면 items/dump  source:"cache"</text><line class="arr" x1="367.0" y1="185" x2="593.0" y2="185" marker-end="url(#ah)"/><circle class="badge" cx="375.0" cy="185" r="7.5"/><text class="badgetxt" x="375.0" y="188.6" text-anchor="middle">2</text><text class="lbl retlbl" x="480.0" y="205" text-anchor="middle">그 파일의 records[]</text><line class="arr ret" x1="593.0" y1="218" x2="367.0" y2="218" marker-end="url(#ah-open)"/><text class="lbl" x="596.0" y="238" text-anchor="middle">upsert 풀 · 후보(라벨된 기록)·트리 조회</text><text class="lbl" x="596.0" y="252" text-anchor="middle">최신 묶음 결과에서 이 기록의 묶음 조회</text><line class="arr" x1="367.0" y1="265" x2="825.0" y2="265" marker-end="url(#ah)"/><circle class="badge" cx="375.0" cy="265" r="7.5"/><text class="badgetxt" x="375.0" y="268.6" text-anchor="middle">3</text><path class="arr" d="M367.0,285 h26 v46 h-26" fill="none" marker-end="url(#ah)"/><text class="lbl selftxt" x="400.0" y="297">rank(): similarity → 단계별 투표 → 확실 판정</text><text class="lbl selftxt" x="400.0" y="311">similar_cases(): 점수 ≥ 0.6 기록의 사례(case_id) 모으기</text><text class="lbl selftxt" x="400.0" y="325">cluster_category(): 묶음 구성원 라벨 합의</text><circle class="badge" cx="367.0" cy="285" r="7.5"/><text class="badgetxt" x="367.0" y="288.6" text-anchor="middle">4</text><text class="lbl retlbl" x="248.0" y="349" text-anchor="middle">matches · levels · suggestion</text><text class="lbl retlbl" x="248.0" y="363" text-anchor="middle">cases · cluster · target_paths</text><line class="arr ret" x1="361.0" y1="376" x2="135.0" y2="376" marker-end="url(#ah-open)"/><text class="lbl" x="364.0" y="396" text-anchor="middle">GET /api/fleet/cases/{id}  (유사 사례의 제목·본문)</text><line class="arr" x1="135.0" y1="409" x2="593.0" y2="409" marker-end="url(#ah)"/><circle class="badge" cx="143.0" cy="409" r="7.5"/><text class="badgetxt" x="143.0" y="412.6" text-anchor="middle">5</text><rect class="note" x="6" y="419" width="604.5600000000001" height="40" rx="5"/><text class="notetxt" x="16" y="433">사례의 제목·본문은 fleet 소유 — scanlabel 은 case_id 만 안다 (SL-CASE-3)</text><text class="notetxt" x="16" y="448">scanlabel 이 내려가 있어도 이 탭만 ErrorNote 를 그리고 다른 탭 · 그래프는 그대로 (DUMP-LBL-9)</text></svg></div>
+
+  <h3>S4. 라벨 저장</h3>
+  <div class="seqwrap"><svg class="seq" viewBox="0 0 960 447" role="img" preserveAspectRatio="xMinYMin meet"><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ahf"/></marker><marker id="ah-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M1,1 L9,5 L1,9" fill="none" class="aho"/></marker></defs><line class="life" x1="132.0" y1="52" x2="132.0" y2="441"/><rect class="actor a-viewer" x="30.0" y="8" width="204" height="44" rx="7"/><text class="actname" x="132.0" y="27" text-anchor="middle">브라우저</text><text class="actsub" x="132.0" y="43" text-anchor="middle">poc_viewer 화면</text><line class="life" x1="364.0" y1="52" x2="364.0" y2="441"/><rect class="actor a-label" x="262.0" y="8" width="204" height="44" rx="7"/><text class="actname" x="364.0" y="27" text-anchor="middle">scanlabel API</text><text class="actsub" x="364.0" y="43" text-anchor="middle">:8100 · FastAPI</text><line class="life" x1="596.0" y1="52" x2="596.0" y2="441"/><rect class="actor a-fleet" x="494.0" y="8" width="204" height="44" rx="7"/><text class="actname" x="596.0" y="27" text-anchor="middle">fleet API</text><text class="actsub" x="596.0" y="43" text-anchor="middle">:8000 · ftpmodule</text><line class="life" x1="828.0" y1="52" x2="828.0" y2="441"/><rect class="actor a-db" x="726.0" y="8" width="204" height="44" rx="7"/><text class="actname" x="828.0" y="27" text-anchor="middle">scanlabel DB</text><text class="actsub" x="828.0" y="43" text-anchor="middle">PostgreSQL</text><text class="lbl" x="248.0" y="78" text-anchor="middle">PUT /labels</text><text class="lbl" x="248.0" y="92" text-anchor="middle">{server_id, set_name, name, source, label_ids:[3]}</text><line class="arr" x1="135.0" y1="105" x2="361.0" y2="105" marker-end="url(#ah)"/><circle class="badge" cx="143.0" cy="105" r="7.5"/><text class="badgetxt" x="143.0" y="108.6" text-anchor="middle">1</text><text class="lbl" x="480.0" y="125" text-anchor="middle">servername 조회 + items/dump  (fresh=True, source:"cache")</text><text class="lbl" x="480.0" y="139" text-anchor="middle">→ 저장 시점의 sig · 모양을 남긴다</text><line class="arr" x1="367.0" y1="152" x2="593.0" y2="152" marker-end="url(#ah)"/><circle class="badge" cx="375.0" cy="152" r="7.5"/><text class="badgetxt" x="375.0" y="155.6" text-anchor="middle">2</text><text class="lbl retlbl" x="480.0" y="172" text-anchor="middle">records[] + sig</text><line class="arr ret" x1="593.0" y1="185" x2="367.0" y2="185" marker-end="url(#ah-open)"/><path class="arr" d="M367.0,205 h26 v32 h-26" fill="none" marker-end="url(#ah)"/><text class="lbl selftxt" x="400.0" y="217">check_selection(): 조상+자손 동시 선택 · 내려진/없는 id 거부</text><text class="lbl selftxt" x="400.0" y="231">실패 → 422 (본문 detail 에 사람이 읽는 문장)</text><circle class="badge" cx="367.0" cy="205" r="7.5"/><text class="badgetxt" x="367.0" y="208.6" text-anchor="middle">3</text><text class="lbl" x="596.0" y="255" text-anchor="middle">scan_labels upsert  (특징 스냅샷 + 메타 사본 포함)</text><line class="arr" x1="367.0" y1="268" x2="825.0" y2="268" marker-end="url(#ah)"/><circle class="badge" cx="375.0" cy="268" r="7.5"/><text class="badgetxt" x="375.0" y="271.6" text-anchor="middle">4</text><text class="lbl" x="596.0" y="288" text-anchor="middle">scan_records upsert  (라벨된 기록은 언제나 풀에도)</text><line class="arr" x1="367.0" y1="301" x2="825.0" y2="301" marker-end="url(#ah)"/><circle class="badge" cx="375.0" cy="301" r="7.5"/><text class="badgetxt" x="375.0" y="304.6" text-anchor="middle">5</text><text class="lbl retlbl" x="248.0" y="321" text-anchor="middle">{label: {...}}   (label_ids 가 [] 면 행 삭제 + {label:null})</text><line class="arr ret" x1="361.0" y1="334" x2="135.0" y2="334" marker-end="url(#ah-open)"/><path class="arr" d="M135.0,354 h26 v32 h-26" fill="none" marker-end="url(#ah)"/><text class="lbl selftxt" x="168.0" y="366">revalidateLabels()</text><text class="lbl selftxt" x="168.0" y="380">key[0]=="label" 인 SWR 키 전부 재검증</text><circle class="badge" cx="135.0" cy="354" r="7.5"/><text class="badgetxt" x="135.0" y="357.6" text-anchor="middle">6</text><rect class="note" x="30.0" y="394" width="900.0" height="25" rx="5"/><text class="notetxt" x="40.0" y="408">트리 건수 · 파일의 ◆ · 제안 ◇ · 유사 기록이 한 번에 새로 고쳐진다</text></svg></div>
+
+  <h3>S5. 「다시 묶기」 — 202 로 시작하고 폴링으로 따라간다</h3>
+  <div class="seqwrap"><svg class="seq" viewBox="0 0 932 533" role="img" preserveAspectRatio="xMinYMin meet"><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ahf"/></marker><marker id="ah-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M1,1 L9,5 L1,9" fill="none" class="aho"/></marker></defs><line class="life" x1="166.0" y1="52" x2="166.0" y2="527"/><rect class="actor a-viewer" x="30.0" y="8" width="272" height="44" rx="7"/><text class="actname" x="166.0" y="27" text-anchor="middle">브라우저</text><text class="actsub" x="166.0" y="43" text-anchor="middle">poc_viewer 화면</text><line class="life" x1="466.0" y1="52" x2="466.0" y2="527"/><rect class="actor a-label" x="330.0" y="8" width="272" height="44" rx="7"/><text class="actname" x="466.0" y="27" text-anchor="middle">scanlabel API</text><text class="actsub" x="466.0" y="43" text-anchor="middle">:8100 · FastAPI</text><line class="life" x1="766.0" y1="52" x2="766.0" y2="527"/><rect class="actor a-db" x="630.0" y="8" width="272" height="44" rx="7"/><text class="actname" x="766.0" y="27" text-anchor="middle">scanlabel DB</text><text class="actsub" x="766.0" y="43" text-anchor="middle">PostgreSQL</text><text class="lbl" x="316.0" y="78" text-anchor="middle">POST /clusters/run  {set_name:"dump"}</text><line class="arr" x1="169.0" y1="91" x2="463.0" y2="91" marker-end="url(#ah)"/><circle class="badge" cx="177.0" cy="91" r="7.5"/><text class="badgetxt" x="177.0" y="94.6" text-anchor="middle">1</text><text class="lbl retlbl" x="316.0" y="111" text-anchor="middle">202 {job:{state:"running", started_at}}  — 즉시 반환</text><line class="arr ret" x1="463.0" y1="124" x2="169.0" y2="124" marker-end="url(#ah-open)"/><rect class="note" x="158.99999999999994" y="134" width="614.0" height="25" rx="5"/><text class="notetxt" x="168.99999999999994" y="148">백그라운드 스레드 시작 (프로세스 메모리의 jobs_state). 이미 돌고 있으면 그 작업을 그대로 돌려준다</text><text class="lbl" x="316.0" y="177" text-anchor="middle">GET /clusters  — 2초마다 (job.state=="running" 인 동안만)</text><line class="arr" x1="169.0" y1="190" x2="463.0" y2="190" marker-end="url(#ah)"/><circle class="badge" cx="177.0" cy="190" r="7.5"/><text class="badgetxt" x="177.0" y="193.6" text-anchor="middle">2</text><text class="lbl retlbl" x="316.0" y="210" text-anchor="middle">{run, clusters[], job:{state:"running"}}</text><line class="arr ret" x1="463.0" y1="223" x2="169.0" y2="223" marker-end="url(#ah-open)"/><text class="lbl" x="616.0" y="243" text-anchor="middle">[스레드] 풀 읽기 — 스캔 종류마다 최근 800건</text><line class="arr" x1="469.0" y1="256" x2="763.0" y2="256" marker-end="url(#ah)"/><circle class="badge" cx="477.0" cy="256" r="7.5"/><text class="badgetxt" x="477.0" y="259.6" text-anchor="middle">3</text><path class="arr" d="M469.0,276 h26 v32 h-26" fill="none" marker-end="url(#ah)"/><text class="lbl selftxt" x="502.0" y="288">[스레드] shape.cluster(): 대표 기록 시드 묶기</text><text class="lbl selftxt" x="502.0" y="302">shape.cluster_map(): 종류별 2D 지도 (landmark MDS)</text><circle class="badge" cx="469.0" cy="276" r="7.5"/><text class="badgetxt" x="469.0" y="279.6" text-anchor="middle">4</text><text class="lbl" x="616.0" y="326" text-anchor="middle">[스레드] cluster_runs · cluster_members · cluster_points 저장 (최신 1건만 유지)</text><line class="arr" x1="469.0" y1="339" x2="763.0" y2="339" marker-end="url(#ah)"/><circle class="badge" cx="477.0" cy="339" r="7.5"/><text class="badgetxt" x="477.0" y="342.6" text-anchor="middle">5</text><text class="lbl" x="316.0" y="359" text-anchor="middle">GET /clusters</text><line class="arr" x1="169.0" y1="372" x2="463.0" y2="372" marker-end="url(#ah)"/><circle class="badge" cx="177.0" cy="372" r="7.5"/><text class="badgetxt" x="177.0" y="375.6" text-anchor="middle">6</text><text class="lbl retlbl" x="316.0" y="392" text-anchor="middle">{job:{state:"done"}, run:{id:5, stale:false}, ...}</text><line class="arr ret" x1="463.0" y1="405" x2="169.0" y2="405" marker-end="url(#ah-open)"/><path class="arr" d="M169.0,425 h26 v32 h-26" fill="none" marker-end="url(#ah)"/><text class="lbl selftxt" x="202.0" y="437">목록 · 지도 · 상세 재조회</text><text class="lbl selftxt" x="202.0" y="451">polling 중지</text><circle class="badge" cx="169.0" cy="425" r="7.5"/><text class="badgetxt" x="169.0" y="428.6" text-anchor="middle">7</text><rect class="note" x="30.0" y="465" width="572.0" height="40" rx="5"/><text class="notetxt" x="40.0" y="479">왜 비동기인가: 2,400건이 18초 걸려 앞단 프록시가 먼저 끊고 화면이 500 을 봤다 (SL-CLU-8)</text><text class="notetxt" x="40.0" y="494">CLI `jobs cluster` 로 돌린 결과는 job 에 안 보이고 저장된 run 으로만 보인다</text></svg></div>
+
+  <h3>S6. 묶음에 라벨 한 번에 붙이기</h3>
+  <div class="seqwrap"><svg class="seq" viewBox="0 0 932 315" role="img" preserveAspectRatio="xMinYMin meet"><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ahf"/></marker><marker id="ah-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M1,1 L9,5 L1,9" fill="none" class="aho"/></marker></defs><line class="life" x1="166.0" y1="52" x2="166.0" y2="309"/><rect class="actor a-viewer" x="30.0" y="8" width="272" height="44" rx="7"/><text class="actname" x="166.0" y="27" text-anchor="middle">브라우저</text><text class="actsub" x="166.0" y="43" text-anchor="middle">poc_viewer 화면</text><line class="life" x1="466.0" y1="52" x2="466.0" y2="309"/><rect class="actor a-label" x="330.0" y="8" width="272" height="44" rx="7"/><text class="actname" x="466.0" y="27" text-anchor="middle">scanlabel API</text><text class="actsub" x="466.0" y="43" text-anchor="middle">:8100 · FastAPI</text><line class="life" x1="766.0" y1="52" x2="766.0" y2="309"/><rect class="actor a-db" x="630.0" y="8" width="272" height="44" rx="7"/><text class="actname" x="766.0" y="27" text-anchor="middle">scanlabel DB</text><text class="actsub" x="766.0" y="43" text-anchor="middle">PostgreSQL</text><text class="lbl" x="316.0" y="78" text-anchor="middle">POST /clusters/{no}/apply</text><text class="lbl" x="316.0" y="92" text-anchor="middle">{run_id, label_ids, record_ids</text><text class="lbl" x="316.0" y="106" text-anchor="middle">null, only_unlabelled:true}</text><line class="arr" x1="169.0" y1="119" x2="463.0" y2="119" marker-end="url(#ah)"/><circle class="badge" cx="177.0" cy="119" r="7.5"/><text class="badgetxt" x="177.0" y="122.6" text-anchor="middle">1</text><path class="arr" d="M469.0,139 h26 v32 h-26" fill="none" marker-end="url(#ah)"/><text class="lbl selftxt" x="502.0" y="151">run_id 가 최신이 아니면 422</text><text class="lbl selftxt" x="502.0" y="165">(그새 다시 묶였다 — 엉뚱한 기록에 붙이지 않게)</text><circle class="badge" cx="469.0" cy="139" r="7.5"/><text class="badgetxt" x="469.0" y="142.6" text-anchor="middle">2</text><path class="arr" d="M469.0,189 h26 v18 h-26" fill="none" marker-end="url(#ah)"/><text class="lbl selftxt" x="502.0" y="201">선택(label_ids)을 한 번만 검사 — 하나라도 어기면 하나도 쓰지 않음</text><circle class="badge" cx="469.0" cy="189" r="7.5"/><text class="badgetxt" x="469.0" y="192.6" text-anchor="middle">3</text><text class="lbl" x="616.0" y="225" text-anchor="middle">풀에 저장된 특징으로 scan_labels 일괄 upsert</text><text class="lbl" x="616.0" y="239" text-anchor="middle">(fleet 호출 없음)</text><line class="arr" x1="469.0" y1="252" x2="763.0" y2="252" marker-end="url(#ah)"/><circle class="badge" cx="477.0" cy="252" r="7.5"/><text class="badgetxt" x="477.0" y="255.6" text-anchor="middle">4</text><text class="lbl retlbl" x="316.0" y="272" text-anchor="middle">{applied: 12, skipped: 5}</text><line class="arr ret" x1="463.0" y1="285" x2="169.0" y2="285" marker-end="url(#ah-open)"/></svg></div>
+
+  <h3>S7. 배치 — 열어 본 적 없는 파일까지 풀에 넣기 (<code>jobs index</code>)</h3>
+  <div class="seqwrap"><svg class="seq" viewBox="0 0 960 336" role="img" preserveAspectRatio="xMinYMin meet"><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ahf"/></marker><marker id="ah-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M1,1 L9,5 L1,9" fill="none" class="aho"/></marker></defs><line class="life" x1="132.0" y1="52" x2="132.0" y2="330"/><rect class="actor a-ext" x="30.0" y="8" width="204" height="44" rx="7"/><text class="actname" x="132.0" y="27" text-anchor="middle">cron / 운영자</text><text class="actsub" x="132.0" y="43" text-anchor="middle">jobs index</text><line class="life" x1="364.0" y1="52" x2="364.0" y2="330"/><rect class="actor a-label" x="262.0" y="8" width="204" height="44" rx="7"/><text class="actname" x="364.0" y="27" text-anchor="middle">scanlabel API</text><text class="actsub" x="364.0" y="43" text-anchor="middle">:8100 · FastAPI</text><line class="life" x1="596.0" y1="52" x2="596.0" y2="330"/><rect class="actor a-fleet" x="494.0" y="8" width="204" height="44" rx="7"/><text class="actname" x="596.0" y="27" text-anchor="middle">fleet API</text><text class="actsub" x="596.0" y="43" text-anchor="middle">:8000 · ftpmodule</text><line class="life" x1="828.0" y1="52" x2="828.0" y2="330"/><rect class="actor a-db" x="726.0" y="8" width="204" height="44" rx="7"/><text class="actname" x="828.0" y="27" text-anchor="middle">scanlabel DB</text><text class="actsub" x="828.0" y="43" text-anchor="middle">PostgreSQL</text><text class="lbl" x="248.0" y="78" text-anchor="middle">python -m scanlabel.application.jobs index</text><line class="arr" x1="135.0" y1="91" x2="361.0" y2="91" marker-end="url(#ah)"/><circle class="badge" cx="143.0" cy="91" r="7.5"/><text class="badgetxt" x="143.0" y="94.6" text-anchor="middle">1</text><text class="lbl" x="596.0" y="111" text-anchor="middle">index_cursors 에서 마지막으로 처리한 세대 id 읽기</text><line class="arr" x1="367.0" y1="124" x2="825.0" y2="124" marker-end="url(#ah)"/><circle class="badge" cx="375.0" cy="124" r="7.5"/><text class="badgetxt" x="375.0" y="127.6" text-anchor="middle">2</text><text class="lbl" x="480.0" y="144" text-anchor="middle">GET /generations?set_name=dump&amp;after_id=…&amp;limit=500</text><line class="arr" x1="367.0" y1="157" x2="593.0" y2="157" marker-end="url(#ah)"/><circle class="badge" cx="375.0" cy="157" r="7.5"/><text class="badgetxt" x="375.0" y="160.6" text-anchor="middle">3</text><text class="lbl retlbl" x="480.0" y="177" text-anchor="middle">세대 목록 (도착 순서, id 오름차순)</text><line class="arr ret" x1="593.0" y1="190" x2="367.0" y2="190" marker-end="url(#ah-open)"/><path class="arr" d="M367.0,210 h26 v32 h-26" fill="none" marker-end="url(#ah)"/><text class="lbl selftxt" x="400.0" y="222">새 파일마다 load_file(source:"cache")</text><text class="lbl selftxt" x="400.0" y="236">캐시가 사라졌으면 skipped 로 보고하고 넘어감</text><circle class="badge" cx="367.0" cy="210" r="7.5"/><text class="badgetxt" x="367.0" y="213.6" text-anchor="middle">4</text><text class="lbl" x="596.0" y="260" text-anchor="middle">scan_records upsert + 커서 갱신 (실패해도 처리한 데까지는 남김)</text><line class="arr" x1="367.0" y1="273" x2="825.0" y2="273" marker-end="url(#ah)"/><circle class="badge" cx="375.0" cy="273" r="7.5"/><text class="badgetxt" x="375.0" y="276.6" text-anchor="middle">5</text><rect class="note" x="30.0" y="283" width="900.0" height="25" rx="5"/><text class="notetxt" x="40.0" y="297">아무도 열어 보지 않은 파일까지 풀에 넣는 주기 작업 — 묶음의 재료를 넓힌다 (SL-POOL-2)</text></svg></div>
+
+  <div class="callout warn"><b class="t">읽기 호출이 쓰기를 한다</b>
+  <code>POST /labels/similar</code> 는 이름은 조회지만 풀(<code>scan_records</code>)을 upsert 합니다. "파일을 열어 봤다 = 본 기록이다"를 묶음의 재료로 삼기 위한 의도된 설계입니다.
+  같은 파일을 다시 열어도 세대·특징 버전·스캔 종류가 같으면 행을 다시 쓰지 않아 <code>seq</code> 가 안 바뀌고, 따라서 묶음이 <code>stale</code> 로 바뀌지 않습니다 (<code>SL-POOL-3</code>).</div>
+</section>
+
+<!-- 5 ───────────────────────────── -->
+<section id="api">
+  <h2><span class="no">05</span>API 표면</h2>
+  <p class="sec-lead">전체 계약은 <code>scanlabel/README.api.md</code>. 호출자는 사실상 poc_viewer 하나이고, CLI(<code>jobs</code>)가 같은 유스케이스를 공유합니다. 인증은 없고 네트워크 위치로 막습니다(fleet 과 동일).</p>
+  <div class="tw"><table>
+    <tr><th>메서드 · 경로</th><th>용도</th><th>fleet 호출</th><th>DB 쓰기</th><th>화면의 훅</th></tr>
+    <tr><td><code>GET /label-defs</code></td><td>라벨 트리(평평한 목록 + 건수)</td><td>—</td><td>—</td><td><code>useLabelDefs</code></td></tr>
+    <tr><td><code>POST·PUT /label-defs</code></td><td>노드 추가(그 단계에 새 노드) · 수정 · 내림 · 같은 단계 부모로 이동</td><td>—</td><td>label_defs</td><td><code>createLabelDef</code> · <code>updateLabelDef</code></td></tr>
+    <tr><td><code>GET /labels</code></td><td>이 파일의 라벨된 기록</td><td>servername 만</td><td>—</td><td><code>useFileLabels</code></td></tr>
+    <tr><td><code>PUT /labels</code> · <code>DELETE /labels</code></td><td>기록 라벨 저장/삭제 (빈 배열 = 삭제)</td><td>items (cache, fresh)</td><td>scan_labels · scan_records</td><td><code>putRecordLabel</code></td></tr>
+    <tr><td><code>POST /labels/similar</code></td><td>source 있음: 유사 기록 + 단계별 제안 + 유사 사례 + 묶음<br>source 없음: 파일 전체 기록별 제안 한 줄씩</td><td>items (cache, 120초 FileCache)</td><td>scan_records (풀)</td><td><code>useSimilar</code> · <code>useFileSuggestions</code></td></tr>
+    <tr><td><code>GET /labels/by-case/{id}</code></td><td>사례 → 그 사례로 라벨된 기록 (거꾸로 찾기)</td><td>—</td><td>—</td><td><code>useCaseRecords</code></td></tr>
+    <tr><td><code>GET /clusters</code></td><td>최신 묶음 결과 + 풀 크기 + <code>job</code> 상태 + <code>stale</code></td><td>—</td><td>—</td><td><code>useClusters</code> (실행 중 2초 폴링)</td></tr>
+    <tr><td><code>POST /clusters/run</code></td><td>다시 묶기 시작 → <b>202</b> (백그라운드 스레드)</td><td>—</td><td>cluster_*</td><td><code>runClusters</code></td></tr>
+    <tr><td><code>GET /clusters/{no}</code></td><td>묶음 하나의 구성원 (대표 먼저). <code>run_id</code> 불일치 422</td><td>—</td><td>—</td><td><code>useCluster</code></td></tr>
+    <tr><td><code>POST /clusters/{no}/apply</code></td><td>묶음에 라벨 일괄 붙이기</td><td><b>없음</b> (풀 특징 사용)</td><td>scan_labels</td><td><code>applyClusterLabel</code></td></tr>
+    <tr><td><code>GET /clusters/map</code></td><td>스캔 종류 하나의 2D 지도 + 지금 기록의 자리</td><td>run 밖 기록이면 cache</td><td>—</td><td><code>useClusterMap</code></td></tr>
+    <tr><td><code>GET /records/{id}</code></td><td>지도에서 누른 풀 기록의 상세 (+ 현재 기록과의 유사도)</td><td>vs 쪽만 cache</td><td>—</td><td><code>useRecordDetail</code></td></tr>
+    <tr><td><code>GET /health</code></td><td>db · fleet 도달 · fleet_url · feature_version</td><td><code>GET /servers</code></td><td>—</td><td>—</td></tr>
+  </table></div>
+  <div class="two">
+    <div class="card"><h4>오류 규약</h4>
+      <div class="tw" style="margin:6px 0 0"><table>
+        <tr><th>status</th><th>뜻</th></tr>
+        <tr><td><code>422</code></td><td>검증 실패(트리 규칙·이름 중복·내려진 라벨·조상+자손·낡은 <code>run_id</code>) <b>또는</b> fleet 이 아직 해석 안 한 파일 — <code>detail</code> 이 사람이 읽는 문장</td></tr>
+        <tr><td><code>404</code></td><td>없는 라벨 · 없는 기록 · fleet 이 모르는 서버 · 없는 묶음 번호 · 묶은 적 없음</td></tr>
+        <tr><td><code>502</code></td><td>fleet 에 닿지 않음</td></tr>
+      </table></div></div>
+    <div class="card"><h4>CLI — <code>python -m scanlabel.application.jobs</code></h4>
+      <ul>
+        <li><code>seed-labels FILE</code> 라벨 트리 투입(JSON/CSV, <b>멱등</b>)</li>
+        <li><code>eval</code> leave-one-out 단계별 적중률 (fleet 불필요)</li>
+        <li><code>refeature</code> <code>FEATURE_VERSION</code> 바뀐 스냅샷 재생성</li>
+        <li><code>index</code> fleet <code>/generations</code> 커서로 풀 채우기</li>
+        <li><code>cluster</code> 화면의 「다시 묶기」와 같은 일</li>
+        <li><code>python -m scanlabel.data.migrate {up,status}</code></li>
+      </ul></div>
+  </div>
+</section>
+
+<!-- 6 ───────────────────────────── -->
+<section id="logic">
+  <h2><span class="no">06</span>판단 로직 (<code>processing/shape.py</code>)</h2>
+  <p class="sec-lead">"비슷한 모양은 같은 원인을 공유한다"는 <b>가설</b> 위에서, 학습 없이 최근접 비교로 동작합니다. 모든 문턱값·가중치는 이 파일의 상수 한 곳에만 있습니다 (<code>SL-SUG-4</code>).</p>
+
+  <h3>6.1 파이프라인</h3>
+  <div class="flow">
+    <div class="step"><b>① 레코드 짝짓기</b>구조로 구분: <code>xyz+value</code> = raw, <code>results</code> = meta, meta.<code>pair</code> = raw.<code>source</code><span class="f">connectors/fleet.pair_scans</span></div>
+    <div class="step"><b>② 특징 스냅샷</b>채널마다 128점 경로 + 16×16 격자 + 통계(정규화 <i>전</i> 값)<span class="f">record_features · FEATURE_VERSION=1</span></div>
+    <div class="step"><b>③ 유사도</b>z-score 후 피어슨 상관 — 1D·2D 가중 평균, 크기비는 따로<span class="f">similarity · prepare</span></div>
+    <div class="step"><b>④ 단계별 투표</b>라벨은 자기 노드+조상에 투표 → 대/중/소 각 단계 "확실" 판정<span class="f">rank</span></div>
+    <div class="step"><b>⑤ 사례·묶음·지도</b>닮은 기록이 가리키는 사례, 대표 시드 묶기, landmark MDS<span class="f">similar_cases · cluster · cluster_map</span></div>
+  </div>
+
+  <h3>6.2 특징 스냅샷과 유사도</h3>
+  <div class="two">
+    <div class="card"><h4>특징 (정규화 전 값을 저장)</h4>
+      <ul>
+        <li>채널마다 스캔 순서 배열을 <b>PATH_N = 128</b>점으로 축소(구간 평균, 짧으면 선형보간)</li>
+        <li>(x, z) 평면을 min–max 로 맞춰 <b>16×16</b> 셀 평균 (빈 셀 = null)</li>
+        <li>n · min · max · mean · std</li>
+        <li>채널은 <code>value</code> 키로만 맞춤 — 검출기→채널 규칙을 복사하지 않음</li>
+        <li><code>""</code>/<code>null</code>/NaN 은 버림 (0 으로 읽지 않음)</li>
+        <li>점이 직선·한 점이면 2D 특징 없음</li>
+      </ul>
+      <p class="mini">정규화 전 값을 저장하므로 정규화 방식만 바꿀 땐 원본이 필요 없습니다. 스냅샷 모양이 바뀌면 <code>FEATURE_VERSION</code> ↑ → <code>jobs refeature</code>.</p></div>
+    <div class="card"><h4>유사도 규칙</h4>
+      <pre>채널 점수 = 0.5 · corr1D + 0.5 · corr2D   (있는 쪽만)
+기록 점수 = 공통 채널 점수의 평균
+corr = z-score(offset·gain 제거) 후 피어슨</pre>
+      <ul>
+        <li><b>1D 는 같은 궤적끼리만</b> — 행 수가 다른 래스터는 인덱스 순서가 달라 무의미. 그래서 기본 비교 범위 = 같은 <code>scan_enum</code></li>
+        <li>2D 는 두 쪽 모두 값이 있는 셀 ≥ <code>MIN_OVERLAP</code>(16)</li>
+        <li>평평한 신호끼리 = 1, 평평 vs 그 외 = 0 (노이즈를 모양으로 키우지 않음)</li>
+        <li>크기 정보는 정규화로 사라지므로 <b>scale 비</b>를 점수에 섞지 않고 따로 반환</li>
+        <li>공통 채널이 없으면 비교 안 함 · 자기 자신은 제외</li>
+      </ul></div>
+  </div>
+
+  <h3>6.3 단계별 제안 — "확실"은 서버가 정한다</h3>
+  <div class="two">
+    <div>
+      <ul class="tl">
+        <li>라벨된 각 후보 기록은 <b>자기 노드와 모든 조상</b>에 투표 (소분류 라벨 = 중·대분류 표도 됨)</li>
+        <li>노드 점수 = 그 아래 기록들의 <b>최고 점수</b>, 근거 건수 = 점수 ≥ 0.60 인 기록 수</li>
+        <li>한 단계가 <b>확실</b> ⇔ 1위 ≥ 0.80 이고, 2위보다 0.05 이상 앞서고, (대분류가 아니면) 위 단계 확실 노드의 자식</li>
+        <li>제안 = 확실한 <b>가장 깊은 단계</b>. 문턱 미만이면 아무것도 제안하지 않음 (억지 제안은 근거처럼 읽히므로)</li>
+        <li>「대분류는 확실, 소분류는 갈림」 같은 부분 확실을 그대로 말할 수 있음</li>
+      </ul>
+    </div>
+    <div class="tw"><table>
+      <tr><th>상수</th><th>값</th><th>의미</th></tr>
+      <tr><td><code>SUGGEST_MIN</code></td><td>0.80</td><td>제안 최소 점수</td></tr>
+      <tr><td><code>MARGIN</code></td><td>0.05</td><td>2위와의 최소 격차</td></tr>
+      <tr><td><code>EVIDENCE_MIN</code></td><td>0.60</td><td>근거 건수 · 사례 투표 최소 점수</td></tr>
+      <tr><td><code>LEVEL_TOP</code> · <code>CASE_TOP</code></td><td>5 · 5</td><td>단계별/사례 목록 길이</td></tr>
+      <tr><td><code>W_1D</code> · <code>W_2D</code></td><td>0.5 · 0.5</td><td>채널 점수 가중</td></tr>
+    </table></div>
+  </div>
+  <p class="mini">유사 사례는 같은 점수 ≥ 0.60 기록들이 자기 라벨의 <code>case_id</code>(자기 것, 없으면 가장 가까운 조상 것)로 투표한 결과를 사례 단위로 모은 것입니다.</p>
+
+  <h3>6.4 묶음(클러스터) — 대표 시드 방식</h3>
+  <div class="two">
+    <div>
+      <ol style="padding-left:20px;margin:6px 0">
+        <li>같은 스캔 종류 안에서만, 종류당 <b>최근 800건</b>까지 모든 쌍을 비교</li>
+        <li>점수 ≥ <code>CLUSTER_MIN</code>(0.80) 이웃이 가장 많은 기록 = <b>대표</b></li>
+        <li>대표와 남은 이웃들이 한 묶음 → 반복 (동률은 이웃 점수 합 → id 로 결정적)</li>
+        <li>3건 미만 무리는 「묶이지 않음」</li>
+      </ol>
+      <p class="mini">모든 구성원이 <b>대표와 직접</b> 0.8 이상 닮으므로 A~B~C 로 사슬처럼 이어 서로 안 닮은 모양을 묶는 일이 없습니다 (단일 연결 기각, <code>SL-X-9</code>). 대표 곡선 하나로 묶음을 보여 줄 수 있는 이유이기도 합니다.</p>
+    </div>
+    <div>
+      <div class="card"><h4>묶음의 분류(category) 합의</h4>
+        <p style="margin:2px 0 6px">라벨된 구성원의 라벨을 단계별로 세어(조상 포함) 한 단계가 <b>합의</b>되려면:</p>
+        <ul><li>1위 노드 비중 ≥ <code>CLUSTER_AGREE</code> 0.60</li><li>2위보다 많고, 위 단계 합의 노드의 자식</li></ul>
+        <p style="margin:6px 0 0">분류 = 합의된 가장 깊은 단계, 없으면 <code>null</code>(라벨 구성원이 없거나 갈림). 화면은 이유를 "라벨된 구성원 없음 / 한 노드에 모이지 않음"으로 옮겨 적습니다.</p></div>
+    </div>
+  </div>
+
+  <h3>6.5 2D 묶음 지도 — landmark MDS</h3>
+  <div class="two">
+    <div>
+      <ul class="tl">
+        <li>거리 = <code>1 − score</code>. 기준점 <b>24개</b>를 max–min 으로 고른다</li>
+        <li>기준점끼리 고전 MDS 로 2D 좌표를 계산</li>
+        <li>나머지는 <b>기준점 24개와의 거리만</b>으로 투영 (기록당 비교 24회)</li>
+        <li>투영식(기준점 id · 의사역행렬 · 평균)을 <code>cluster_runs.maps</code> 에 저장 → 묶음 <i>뒤에</i> 본 기록도 재실행 없이 같은 지도에 놓음 (<code>in_run:false</code>)</li>
+      </ul>
+    </div>
+    <div class="callout"><b class="t">근사임을 화면이 말한다</b>
+    t-SNE/UMAP 은 새 기록을 재실행 없이 못 놓고 numpy 를 요구해 기각, 완전 MDS 는 800² 고유값 문제라 순수 Python 에 부적합 (<code>SL-MAP-4</code>).
+    클러스터는 <b>색이 아닌 윤곽선과 번호</b>로 구분하고, 라벨 ●/미라벨 ○로 표시합니다 (<code>DUMP-CLU-8</code>).</div>
+  </div>
+
+  <h3>6.6 성능 · 평가</h3>
+  <div class="tw"><table>
+    <tr><th>항목</th><th>수치 · 규칙</th><th>근거</th></tr>
+    <tr><td>묶기 비용</td><td>n² — 800건 ≈ 6초, 2,400건(3종) ≈ 18~20초</td><td><code>math.sumprod</code> + <code>shape.prepare</code> 로 60초 → 6초 (<code>SL-X-6</code>)</td></tr>
+    <tr><td>평가</td><td><code>jobs eval</code> — 라벨된 기록의 leave-one-out, 단계별 top-1 · top-3 · 제안률 · 제안 적중률</td><td>상수를 바꾸면 결과를 커밋 메시지에 적는 규칙</td></tr>
+    <tr><td>가설 검증</td><td><b>아직 실제 라벨로는 미검증</b> — 개발 시점에 실제 dump 샘플이 없었음</td><td><code>SL-EVAL-2</code></td></tr>
+  </table></div>
+</section>
+
+<!-- 7 ───────────────────────────── -->
+<section id="data">
+  <h2><span class="no">07</span>데이터 모델</h2>
+  <p class="sec-lead">PostgreSQL, raw SQL, 마이그레이션 4개. 사람이 읽는 시각은 KST ISO 텍스트로 저장합니다. 기록의 정체성은 <code>(servername, set_name, name, source)</code> 입니다.</p>
+  <figure><div class="diagwrap">
+  <svg class="diag" viewBox="0 0 1040 360" role="img" aria-label="테이블 관계">
+    <defs><marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink)"/></marker></defs>
+    <rect class="box bx-db" x="16" y="20" width="250" height="150" rx="9"/>
+    <text class="bt" x="30" y="42">label_defs</text><text class="bs" x="30" y="60">라벨 트리 (대·중·소, 삭제 없음 retired)</text>
+    <text class="bs" x="30" y="80">id · parent_id · level(1–3) · code · name</text><text class="bs" x="30" y="96">case_id(→ fleet acs_case, soft) · origin</text>
+    <text class="bs" x="30" y="112">retired · sort_no · author(SSO 자리)</text><text class="bs" x="30" y="132">CHECK: level↔parent · UNIQUE 형제 이름</text><text class="bs" x="30" y="148">UNIQUE code(비어있지 않으면)</text>
+
+    <rect class="box bx-db" x="330" y="20" width="270" height="150" rx="9"/>
+    <text class="bt" x="344" y="42">scan_labels</text><text class="bs" x="344" y="60">라벨된 기록 1건 = 1행</text>
+    <text class="bs" x="344" y="80">servername · server_id · set_name</text><text class="bs" x="344" y="96">name · source · label_ids[] (GIN)</text>
+    <text class="bs" x="344" y="112">sig · scan_enum · meta(표시용 사본)</text><text class="bs" x="344" y="128">features(스냅샷) · feature_version</text><text class="bs" x="344" y="148">fleet 캐시가 정리돼도 라벨이 살아남음</text>
+    <line class="ln" x1="330" y1="96" x2="268" y2="96" marker-end="url(#a5)"/><text class="lt2" x="270" y="88">label_ids</text>
+
+    <rect class="box bx-db" x="664" y="20" width="360" height="150" rx="9"/>
+    <text class="bt" x="678" y="42">scan_records  (기록 풀)</text><text class="bs" x="678" y="60">본 기록 전부 — 라벨 유무와 무관</text>
+    <text class="bs" x="678" y="80">(servername,set_name,name,source) UNIQUE</text><text class="bs" x="678" y="96">sig · scan_enum · meta · features · feature_version</text>
+    <text class="bs" x="678" y="112">seen_at · updated_at · <tspan font-weight="700">seq</tspan>(변경 때만 새 번호)</text><text class="bs" x="678" y="132">seq 최댓값 → 묶음의 stale 판정</text><text class="bs" x="678" y="148">들어오는 길: 파일 열기 · 라벨 · jobs index</text>
+    <line class="ln" x1="600" y1="96" x2="662" y2="96" marker-end="url(#a5)" style="stroke-dasharray:4 3"/><text class="lt2" x="602" y="88">풀에도 복사</text>
+
+    <rect class="box bx-db" x="16" y="214" width="250" height="110" rx="9"/>
+    <text class="bt" x="30" y="236">cluster_runs</text><text class="bs" x="30" y="254">묶음 계산 1회 (세트당 최신 1건만 유지)</text>
+    <text class="bs" x="30" y="272">threshold · min_size · truncated · pool_seq</text><text class="bs" x="30" y="288">feature_version · maps(투영식)</text><text class="bs" x="30" y="304">created_at</text>
+    <rect class="box bx-db" x="330" y="214" width="270" height="110" rx="9"/>
+    <text class="bt" x="344" y="236">cluster_members</text><text class="bs" x="344" y="254">run_id · cluster_no(1부터, 큰 묶음 먼저)</text><text class="bs" x="344" y="272">record_id · scan_enum · representative</text><text class="bs" x="344" y="290">score(대표와의 점수, 대표=1)</text><text class="bs" x="344" y="308">묶이지 않은 기록은 행이 없음</text>
+    <rect class="box bx-db" x="664" y="214" width="170" height="110" rx="9"/>
+    <text class="bt" x="678" y="236">cluster_points</text><text class="bs" x="678" y="254">run_id · record_id</text><text class="bs" x="678" y="272">scan_enum · x · y</text><text class="bs" x="678" y="290">(지도 좌표)</text>
+    <rect class="box bx-db" x="854" y="214" width="170" height="110" rx="9"/>
+    <text class="bt" x="868" y="236">index_cursors</text><text class="bs" x="868" y="254">set_name → after_id</text><text class="bs" x="868" y="272">jobs index 가 fleet</text><text class="bs" x="868" y="290">/generations 를 따라간 자리</text>
+    <line class="ln" x1="266" y1="270" x2="328" y2="270" marker-end="url(#a5)"/>
+        <line class="ln" x1="780" y1="170" x2="780" y2="212" marker-end="url(#a5)" style="stroke-dasharray:4 3"/><text class="lt2" x="786" y="196">record_id</text>
+    <text class="lt2" x="16" y="348">schema_migrations: 마이그레이션 장부(체크섬). Store 는 시작할 때 버전을 확인하고 불일치면 거부 — DDL 은 migrate 만.</text>
+  </svg></div>
+  <figcaption>화살표는 참조(논리적 FK 포함). <code>label_defs.case_id</code> 만 다른 DB 를 가리키는 소프트 참조입니다.</figcaption></figure>
+  <div class="tw"><table>
+    <tr><th>마이그레이션</th><th>내용</th></tr>
+    <tr><td><code>0001_initial</code></td><td>label_defs · scan_labels (+ 형제 이름 유일 · 코드 유일 · GIN)</td></tr>
+    <tr><td><code>0002_record_pool_and_clusters</code></td><td>scan_records · index_cursors · cluster_runs · cluster_members, 기존 라벨 기록을 풀로 복사</td></tr>
+    <tr><td><code>0003_taxonomy_id_0603</code></td><td>실제 분류표 ID-0603 시드 (error_no › category › error, 3단계 고정, 멱등)</td></tr>
+    <tr><td><code>0004_cluster_map</code></td><td>cluster_points · cluster_runs.maps (2D 지도)</td></tr>
+  </table></div>
+  <p class="mini">적용된 파일은 불변(체크섬). 바꾸려면 새 <code>NNNN_*.sql</code>. <code>.gitattributes</code> 가 .sql 의 줄바꿈 변환을 막아 체크섬이 어긋나지 않게 합니다.</p>
+</section>
+
+<!-- 8 ───────────────────────────── -->
+<section id="arch">
+  <h2><span class="no">08</span>코드 구조</h2>
+  <div class="tw"><table>
+    <tr><th>영역</th><th>파일</th><th>책임</th><th>줄 수</th></tr>
+    <tr><td rowspan="2"><span class="tag t-viewer">processing</span><br><span class="mini">순수</span></td><td><code>shape.py</code></td><td>특징 · 유사도(<code>prepare</code> 포함) · rank · 유사 사례 · 클러스터 · 묶음 분류 · 지도 · leave-one-out. 모든 상수 보관</td><td>589</td></tr>
+    <tr><td><code>tree.py</code></td><td>경로 · 조상 · 유효한 내림 · 선택 검사 · 새 노드 단계 · 이동 검사</td><td>117</td></tr>
+    <tr><td><span class="tag t-fleet">connectors</span></td><td><code>fleet.py</code></td><td>fleet 호출 유일 창구: <code>Fleet</code>(httpx) · <code>pair_scans</code> · <code>FileCache</code>(8파일/120초). 라벨·점수·테이블을 모름</td><td>165</td></tr>
+    <tr><td rowspan="2"><span class="tag t-db">data</span></td><td><code>repository.py</code></td><td><code>Store</code> — 트리 · 기록 라벨 · 풀 · 커서 · 묶음 · 지도 저장. <code>ValueError</code>→422, <code>KeyError</code>→404</td><td>453</td></tr>
+    <tr><td><code>migrate.py</code> + <code>migrations/</code></td><td>번호 순 forward-only SQL · 장부 · 체크섬 · advisory lock</td><td>166</td></tr>
+    <tr><td rowspan="3"><span class="tag t-label">application</span></td><td><code>usecases.py</code></td><td>API·CLI 공용: <code>seed_labels</code> · <code>run_eval</code> · <code>refeature</code> · <code>pool_rows</code> · <code>index</code> · <code>run_clusters</code></td><td>178</td></tr>
+    <tr><td><code>api.py</code></td><td>FastAPI 라우트(<code>create_app</code>) — 얇은 어댑터</td><td>528</td></tr>
+    <tr><td><code>jobs.py</code></td><td>CLI — 인자와 출력만</td><td>89</td></tr>
+    <tr><td><span class="tag t-ext">top</span></td><td><code>timebase.py</code></td><td>벽시계 읽기 · KST 변환의 유일한 곳</td><td>16</td></tr>
+  </table></div>
+  <div class="callout info"><b class="t">문서도 같이 구조화됨</b>
+  영역마다 <code>__spec__.md</code>(책임 · 의존 규칙 · 결정 기록 · 테스트 지도), 전역 요구사항은 <code>SPEC.md</code>(ID 한 줄 = 요구 하나, <code>[test: …]</code> 태그), 변경 종류별 "어디를 고치나" 표는 <code>CLAUDE.md</code>, 선택 테스트 지도는 <code>README.dev.md</code>.
+  결정은 Decision / Reason / Rejected / Revisit when / Validation 틀로 한 번만 기록합니다 — 기각한 대안은 git 에 안 남기 때문입니다.</div>
+
+  <h3>변경 → 어디를 고치나</h3>
+  <div class="tw"><table>
+    <tr><th>변경</th><th>코드 · 문서 · 테스트</th></tr>
+    <tr><td>임계값/가중치/유사도 규칙</td><td><code>shape.py</code> 상수 · <code>SPEC.md</code> 한 줄 · <code>test_shape.py</code> — <b><code>jobs eval</code> 수치를 커밋 메시지에</b></td></tr>
+    <tr><td>스냅샷 모양</td><td><code>shape.py</code> + <code>FEATURE_VERSION</code>↑ · 배포 후 <code>jobs refeature</code></td></tr>
+    <tr><td>엔드포인트</td><td><code>api.py</code>(+<code>usecases.py</code>) · <code>README.api.md</code> 같은 변경에서 · <code>test_api.py</code></td></tr>
+    <tr><td>스키마</td><td>새 <code>migrations/NNNN_*.sql</code> + <code>Store</code> · <code>data/__spec__.md</code> 표</td></tr>
+    <tr><td>fleet 에 새로 필요한 것</td><td><b>fleet 에 먼저 요청</b>(<code>SL-FLEET-1</code>) → 그다음 <code>connectors/fleet.py</code> 만</td></tr>
+  </table></div>
+</section>
+
+<!-- 9 ───────────────────────────── -->
+<section id="resilience">
+  <h2><span class="no">09</span>장애 · 캐시 · 동시성</h2>
+  <div class="grid g2">
+    <div class="card"><h4>장애 격리</h4>
+      <div class="tw" style="margin:6px 0 0"><table>
+        <tr><th>상황</th><th>결과</th></tr>
+        <tr><td>scanlabel 다운</td><td>라벨 탭만 에러 + 「다시 시도」. 그래프 · 다른 탭 · 기록 목록 정상, 행 표식만 비어 있음</td></tr>
+        <tr><td>fleet 다운</td><td>scanlabel 이 <code>FleetUnavailable</code> → <b>502</b>. 저장된 묶음 목록 · 구성원 · 지도(묶음 안의 기록)는 fleet 없이도 조회됨</td></tr>
+        <tr><td>fleet 이 해석 안 한 파일</td><td><code>NotCached</code> → <b>422</b> "먼저 Dump 화면에서 파일을 열어 달라"</td></tr>
+        <tr><td>fleet 캐시가 정리된 오래된 라벨</td><td>스냅샷이 라벨 행에 있어 유사 비교는 계속됨. <code>refeature</code> 때만 <code>stale</code> 로 보고</td></tr>
+      </table></div></div>
+    <div class="card"><h4>캐시 · 상태</h4>
+      <ul>
+        <li><b>FileCache</b> 파일 단위 8개 · 120초 — 기록을 바꿔 가며 눌러도 파일 전체를 다시 받지 않음. 저장(PUT)은 <code>fresh=True</code> 로 항상 새로 읽어 그 시점의 세대를 남김</li>
+        <li><b>servername 캐시</b> <code>GET /servers</code> 결과 60초 (<code>Fleet._servers</code>, 락 보호)</li>
+        <li><b>httpx</b> 타임아웃 60초</li>
+        <li><b>SWR</b> 라벨 키는 모두 <code>["label", …]</code> — 변경 후 <code>revalidateLabels()</code> 가 한꺼번에 무효화. <code>revalidateOnFocus:false</code></li>
+        <li><b>잡 상태</b> API 프로세스 메모리 (<code>jobs_state</code> + 락). 단일 프로세스 가정</li>
+      </ul></div>
+    <div class="card"><h4>일관성 장치</h4>
+      <ul>
+        <li><b>run_id 고정</b> — 일괄 라벨은 화면이 본 그 묶음 결과에만 적용. 그새 다시 묶이면 422</li>
+        <li><b>All-or-nothing</b> — 일괄 라벨은 선택을 한 번 검사하고 하나라도 어기면 아무것도 쓰지 않음</li>
+        <li><b>stale 표시</b> — 풀의 <code>seq</code> 가 묶음 때보다 커지면 「새 기록 있음」 (자동 재계산 안 함: 번호가 슬그머니 바뀌지 않게)</li>
+        <li><b>멱등</b> — 시드 · 마이그레이션 0003 · 인덱스 커서(처리한 마지막 세대 id)</li>
+        <li><b>이름 변경 추적</b> — 기록은 라벨 id 를 가지므로 이름을 바꾸면 모든 기록에 반영</li>
+      </ul></div>
+    <div class="card"><h4>동시성</h4>
+      <ul>
+        <li>다시 묶기는 <b>백그라운드 스레드 1개</b> (세트당). 두 번째 요청은 돌고 있는 잡을 그대로 반환</li>
+        <li>폴링은 <code>job.state==="running"</code> 일 때만 2초 간격, 끝나면 목록·지도·상세 재검증</li>
+        <li>CLI <code>jobs cluster</code> 결과는 잡 상태엔 안 보이고 저장된 run 으로만 보임</li>
+        <li>DB 는 psycopg 풀, 마이그레이션은 advisory lock</li>
+      </ul></div>
+  </div>
+</section>
+
+<!-- 10 ───────────────────────────── -->
+<section id="decisions">
+  <h2><span class="no">10</span>설계 결정과 기각한 대안</h2>
+  <p class="sec-lead">기각한 대안은 커밋 이력에 남지 않으므로 이 목록이 유일한 기록에 가깝습니다. 원문은 <code>SPEC.md</code> 의 <code>SL-X-*</code> 와 영역별 <code>__spec__.md</code>.</p>
+
+  <details class="dec" open><summary><span class="id">SL-X-1</span>fleet 안에 분석을 넣지 않고 별도 프로젝트로</summary><div class="body">
+    <b>이유:</b> fleet 은 "가져오고 해석하고 서빙"하는 곳인데, 분석이 들어오면 첫 연산·첫 파생 저장 데이터가 생긴다. 사용자가 별도 프로젝트로 분기하자고 결정.
+    <b>대가:</b> HTTP 한 단계와 캐시 전제가 생김.</div></details>
+  <details class="dec"><summary><span class="id">SL-X-2</span>특징 계산을 브라우저에서 하지 않는다</summary><div class="body">특징 정의가 TypeScript 에 박히고, 브라우저 없이 평가·제안이 불가능하며, 라벨이 수천 개가 되면 옮길 양이 커진다. 서버가 특징을 계산해 저장한다.</div></details>
+  <details class="dec"><summary><span class="id">SL-X-3</span>분류기(SVM/RF/CNN) 대신 최근접 비교</summary><div class="body">라벨 수십 개에서는 과적합만 한다. 최근접 비교는 첫 라벨부터 동작하고 <b>근거(닮은 기록)를 그대로 보여 줄 수 있다</b>. 클래스당 수백 라벨이 되면 재검토.</div></details>
+  <details class="dec"><summary><span class="id">SL-X-4 · SL-TREE-2</span>자유 태그 대신 고정 트리 + 필요 시 추가</summary><div class="body">자유 텍스트는 같은 모양을 <code>edge drop</code>/<code>엣지드롭</code> 처럼 철자별로 쪼개 제안도 같이 쪼개진다. "정해진 걸 먼저 쓰고, 없으면 그 단계에 추가". 3단계는 고정 — ID-0603 의 <code>IFM-MIOB</code> 같은 접두어 묶음은 4단계로 늘리지 않고 소분류 이름 안에 둔다 (<code>SL-TREE-11</code>: 4단계는 노드당 표본을 더 얇게 하고 단계별 평가의 의미를 깨뜨림).</div></details>
+  <details class="dec"><summary><span class="id">SL-X-5 · SL-X-6</span>pgvector · numpy 도입 보류</summary><div class="body">수십~수천 건을 파이썬으로 전수 비교해도 수십 ms. 폐쇄망 PG 에 확장을 하나 더 얹지 않는다. 묶기에서도 <code>math.sumprod</code> 로 800건 60초→6초가 나와 numpy 없이 간다. 바뀔 파일은 <code>shape.py</code> 하나뿐.</div></details>
+  <details class="dec"><summary><span class="id">SL-X-7</span>묶음을 저장하지 않고 즉석 계산하지 않는다</summary><div class="body">기록이 들어올 때마다 묶음 번호가 목록·상세·일괄 라벨 사이에서 어긋난다. 일괄 라벨은 사람이 본 구성원과 정확히 같아야 하므로 결과를 저장하고 <code>run_id</code> 로 못 박는다.</div></details>
+  <details class="dec"><summary><span class="id">SL-X-8 · SL-X-9</span>k-means · 계층 · 단일 연결 클러스터링 기각</summary><div class="body">k-means 는 k 와 상관이 아닌 벡터 공간을 요구, 평균 연결은 순수 파이썬에서 O(n³) 이고 모두가 닮는 대표가 없다. 단일 연결은 A~B~C 로 사슬이 이어진다. → 대표 시드 방식.</div></details>
+  <details class="dec"><summary><span class="id">SL-CLU-8</span>다시 묶기는 202 + 백그라운드 스레드</summary><div class="body">요청 하나에 매달리게 했더니 2,400건 18초에서 Next 프록시가 연결을 끊고 화면이 fleet 의 "set 다운로드 실패 — 전체 롤백됨"을 빌려 써서 500 으로 보였다. 프록시 타임아웃을 늘리는 방법은 n² 가 커지면 다른 곳에서 또 터지므로 기각. 이 일로 <code>core/api.ts</code> 가 fleet 의 오류 문구를 다른 상류에 빌려주지 않게 바뀌었다.</div></details>
+  <details class="dec"><summary><span class="id">SL-ARCH-4</span>구조화는 파일 이동만, 호환 shim 없음</summary><div class="body">테이블·컬럼·마이그레이션 체크섬이 그대로라 기존 DB 는 아무것도 할 필요가 없다. 옛 모듈 경로를 되살리는 re-export 는 낡은 호출자를 숨기므로 두지 않고, 호출자(워크스페이스 실행 구성·문서)를 같이 고쳤다. 진입점: <code>scanlabel.application.api:app</code> · <code>.application.jobs</code> · <code>.data.migrate</code>.</div></details>
+</section>
+
+<!-- 11 ───────────────────────────── -->
+<section id="ops">
+  <h2><span class="no">11</span>실행 · 검증 · 알려진 한계</h2>
+  <div class="two">
+    <div class="card"><h4>이 PC 에서 띄우기</h4>
+<pre># 1) 프로젝트 전용 PostgreSQL 16 (5433)
+.\.local\pg.ps1 start
+
+# 2) scanlabel
+cd scanlabel
+$env:SCANLABEL_DB_DSN = 'postgresql://postgres@127.0.0.1:5433/scanlabel'
+$env:FLEET_API_URL    = 'http://localhost:8000'   # 또는 목 8787
+python -m scanlabel.data.migrate up
+python -m uvicorn scanlabel.application.api:app --port 8100
+
+# 3) poc_viewer  (SCANLABEL_API_URL 기본 http://localhost:8100)
+npm run dev        # :3000</pre>
+      <p class="mini">VS Code 의 compound 「풀스택」 구성이 위를 한 번에 띄웁니다. 5433 은 다른 서비스(Docker/WSL)가 쓰고 있을 수 있으니 접속이 거부되면 먼저 확인.</p></div>
+    <div class="card"><h4>검증</h4>
+<pre>$env:SCANLABEL_TEST_DSN =
+  'postgresql://postgres@127.0.0.1:5433/scanlabel_test'
+python -m pytest        # 58 passed</pre>
+      <ul>
+        <li><code>test_architecture</code> 의존 방향 · 순수성 · 시계 읽기</li>
+        <li><code>test_shape</code> 특징 · 유사도 · rank · 클러스터 · 지도 · 평가</li>
+        <li><code>test_tree</code> · <code>test_taxonomy</code> 트리 규칙 · 0603 멱등</li>
+        <li><code>test_api</code> · <code>test_cluster</code> 실제 PG 에 대한 통합 (조용한 skip 없음)</li>
+      </ul></div>
+  </div>
+
+  <h3>알려진 한계 · 열려 있는 일</h3>
+  <div class="tw"><table>
+    <tr><th>항목</th><th>내용</th><th>다음에 볼 때</th></tr>
+    <tr><td>가설 미검증</td><td>"닮은 모양 = 같은 원인"을 실제 라벨로 확인하지 못함 (<code>SL-EVAL-2</code>)</td><td>실제 라벨이 쌓이면 <code>jobs eval</code> 로 단계별 적중률 확인 후 문턱값 조정</td></tr>
+    <tr><td>묶기 비용 n²</td><td>스캔 종류당 최근 800건 상한 (넘으면 <code>truncated</code> 로 보고)</td><td>종류당 수천 건이면 numpy 도입 재검토 (<code>SL-X-8</code>)</td></tr>
+    <tr><td>잡 상태가 프로세스 메모리</td><td>다중 프로세스·재시작에서는 <code>job</code> 이 사라짐 (결과 run 은 DB 에 남음)</td><td>워커를 늘릴 때 DB 로 이동</td></tr>
+    <tr><td>인증 없음 · 작성자 공란</td><td><code>author</code> 칼럼은 사내 SSO 자리만 잡아 둠</td><td>SSO 연동 시</td></tr>
+    <tr><td>fleet 해석 선행 필요</td><td>cache 전용이라 fleet 이 받지 않은 파일은 라벨 불가 (422)</td><td><code>jobs index</code> 를 cron 으로 돌려 풀을 넓히면 열어 본 적 없는 파일도 묶음 재료가 됨</td></tr>
+    <tr><td>배포 단위</td><td>워크스페이스(<code>photo-genic</code>) 루트는 git 저장소가 아니고, scanlabel 은 자기 저장소를 가짐 (ftpmodule · poc_viewer 는 별개 원격)</td><td>scanlabel 원격: <code>moyuchan84/dumplabeling</code></td></tr>
+  </table></div>
+
+  <footer>
+    작성 근거: <code>scanlabel/SPEC.md</code> · <code>README.api.md</code> · 영역별 <code>__spec__.md</code> · <code>api.py</code> · <code>usecases.py</code> · <code>connectors/fleet.py</code> ·
+    <code>poc_viewer/next.config.ts</code> · <code>src/core/labels.ts</code> · scan-dashboard <code>SPEC.md</code>(DUMP-LBL/SIM/CLU) · <code>ftpmodule/README.api.md</code>, <code>CLAUDE.md</code> — 2026-10-19 시점 코드 기준.
+    코드가 바뀌면 이 문서는 낡습니다. 정본은 항상 각 저장소의 SPEC 입니다.
+  </footer>
+</section>
+
+</main>
+</div>
+<script>
+(function(){
+  var links=[].slice.call(document.querySelectorAll('#toc a[href^="#"]'));
+  var map={};links.forEach(function(a){map[a.getAttribute('href').slice(1)]=a});
+  var secs=[].slice.call(document.querySelectorAll('main section'));
+  if(!('IntersectionObserver' in window))return;
+  var io=new IntersectionObserver(function(es){
+    es.forEach(function(e){
+      if(e.isIntersecting){links.forEach(function(a){a.classList.remove('on')});
+        var a=map[e.target.id]; if(a)a.classList.add('on');}
+    });
+  },{rootMargin:'-15% 0px -75% 0px'});
+  secs.forEach(function(s){io.observe(s)});
+})();
+</script>
+</body>
+</html>
