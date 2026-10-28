@@ -22,12 +22,33 @@ def test_same_shape_scores_near_one_across_density_gain_and_offset():
     assert sim["d1"] > 0.97 and sim["d2"] > 0.97
 
 
-def test_1d_needs_the_same_trajectory_but_2d_does_not():
-    # 행 수가 다른 raster 는 인덱스 순서가 다른 경로다 — 1D 는 비교가 안 되고 2D 만 맞는다.
-    # 그래서 기본 비교 범위가 「같은 스캔 종류끼리」다 (SPEC.md 「한계」).
+def test_a_2d_scan_compares_by_x_and_z_profiles_not_by_scan_order():
+    # 행 수가 다른 raster 는 측정 순서가 다른 경로다 — 그 순서로 편 곡선은 뭉개지지만 단면은 순서와 무관하다.
     sim = shape.similarity(feats(synth.peak(), cols=30, rows=20), feats(synth.peak(), cols=60, rows=40))
     assert sim["d2"] > 0.97
-    assert abs(sim["d1"]) < 0.3
+    assert sim["d1"] > 0.97
+    ch = sim["by_channel"]["A"]
+    assert ch["dx"] > 0.97 and ch["dz"] > 0.97
+
+
+def test_x_profile_z_profile_and_grid_are_normalised_each_on_its_own():
+    # Z 기울기가 1000 배 큰 기록과 3 배인 기록 — 한꺼번에 정규화하면 X 의 봉우리가 기울기에 묻힌다.
+    bump = synth.peak(cz=0.5, w=0.1)
+    a = feats(lambda x, z: 1000.0 * z + bump(x, 0.5))
+    b = feats(lambda x, z: 3.0 * z + bump(x, 0.5))
+    ch = shape.similarity(a, b)["by_channel"]["A"]
+    assert ch["dx"] > 0.99 and ch["dz"] > 0.99
+    assert ch["d2"] < ch["d1"]
+    prof = shape.normalized_profiles(b, ["A"], grid=True)["A"]
+    assert max(prof["x"]) > 1.0                       # X 단면은 제 범위로 펴져 봉우리가 보인다
+    assert len(prof["x"]) == len(prof["z"]) == shape.GRID_N and len(prof["grid"]) == shape.GRID_N ** 2
+
+
+def test_a_line_scan_and_an_area_scan_are_not_compared():
+    line = {"value": {"A": [float(i % 7) for i in range(200)]},
+            "xyz": {"x": [float(i) for i in range(200)], "z": [0.0] * 200}}
+    assert shape.similarity(shape.record_features(line), feats(synth.peak(), channels=("A",))) is None
+    assert shape.normalized_profiles(shape.record_features(line))["A"].keys() == {"line"}
 
 
 def test_different_shapes_score_low():
@@ -170,8 +191,8 @@ def test_similar_cases_are_grouped_by_case_and_ignore_unlike_records():
 
 # ─── 묶음 ──────────────────────────────────────────────────────────────────
 
-def item(i, fn, scan_enum="S", **kw):
-    return {"id": i, "features": feats(fn, **kw), "scan_enum": scan_enum}
+def item(i, fn, scan_enum="S", sensor_id="", **kw):
+    return {"id": i, "features": feats(fn, **kw), "scan_enum": scan_enum, "sensor_id": sensor_id}
 
 
 def test_clusters_group_like_shapes_and_leave_the_rest_unclustered():
@@ -195,6 +216,17 @@ def test_clusters_never_mix_scan_kinds():
     out = shape.cluster(items + [item(5, synth.peak(), scan_enum="A")])
     assert [c["scan_enum"] for c in out["clusters"]] == ["A"]
     assert sorted(m["id"] for m in out["clusters"][0]["members"]) == [1, 2, 5]
+
+
+def test_clusters_never_mix_sensors_of_one_scan_kind():
+    # 같은 스캔 종류 · 같은 모양이어도 센서가 다르면 다른 범위다 (SL-CLU-3)
+    items = ([item(i, synth.peak(), sensor_id="1", gain=1.0 + i) for i in range(1, 4)]
+             + [item(i, synth.peak(), sensor_id="2", gain=1.0 + i) for i in range(4, 6)])
+    out = shape.cluster(items)
+    assert [(c["scan_enum"], c["sensor_id"]) for c in out["clusters"]] == [("S", "1")]
+    assert sorted(m["id"] for m in out["clusters"][0]["members"]) == [1, 2, 3]
+    assert sorted(out["unclustered"]) == [4, 5]                  # 센서 2 는 2건뿐 — 섞이지 않는다
+    assert shape.group_key("S", "1") != shape.group_key("S", "2") != shape.group_key("S", "")
 
 
 def test_cluster_category_is_the_deepest_level_the_labelled_members_agree_on():

@@ -81,7 +81,8 @@ def _sim_out(sim: dict) -> dict:
         "score": _r(sim["score"]), "d1": _r(sim["d1"]), "d2": _r(sim["d2"]),
         "scale": _r(sim["scale"]),
         "by_channel": {k: {"score": _r(v["score"]), "d1": _r(v["d1"]), "d2": _r(v["d2"]),
-                           "scale": _r(v["scale"])} for k, v in sim["by_channel"].items()},
+                           "dx": _r(v["dx"]), "dz": _r(v["dz"]), "scale": _r(v["scale"])}
+                       for k, v in sim["by_channel"].items()},
     }
 
 
@@ -97,13 +98,13 @@ def _labels_out(tree, ids) -> list[dict]:
 def _record_ref(r: dict) -> dict:
     return {"record_id": r["record_id"], "servername": r["servername"], "server_id": r["server_id"],
             "name": r["name"], "source": r["source"], "sig": r["sig"], "scan_enum": r["scan_enum"],
-            "meta": r["meta"]}
+            "sensor_id": r.get("sensor_id") or "", "meta": r["meta"]}
 
 
 def _show_channel(features: Optional[dict]) -> Optional[str]:
-    """묶음을 그려 보일 채널 — 1D 경로가 있는 채널 중 이름 순 첫째. 한 묶음 안에서는 모두 같은 채널."""
+    """묶음을 그려 보일 채널 — 단면(또는 선 스캔의 곡선)이 있는 채널 중 이름 순 첫째. 한 묶음 안에서는 모두 같은 채널."""
     chans = (features or {}).get("channels") or {}
-    keys = sorted(k for k, v in chans.items() if (v or {}).get("path"))
+    keys = sorted(k for k, v in chans.items() if (v or {}).get("grid") or (v or {}).get("path"))
     return keys[0] if keys else None
 
 
@@ -258,14 +259,14 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
                 "labels": [{"id": i, "level": int(tree.get(i)["level"]), "path": tree.path(i),
                             "case_id": tree.case_for(i)} for i in c["label_ids"] if i in tree],
                 "similarity": _sim_out(sim),
-                "paths": shape.normalized_paths(c["features"], sim["by_channel"].keys()),
+                "profiles": shape.normalized_profiles(c["features"], sim["by_channel"].keys()),
             })
         sug = res["suggestion"]
         return {
             "sig": f.sig,
             "source": s.source,
             "scan_enum": scan_enum_of(s),
-            "target_paths": shape.normalized_paths(feats),
+            "target_profiles": shape.normalized_profiles(feats),
             "matches": matches,
             "levels": {str(k): _level_out(v) for k, v in res["levels"].items()},
             "suggestion": None if sug is None else {**sug, "score": _r(sug["score"])},
@@ -303,6 +304,7 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
             [labels.get((m["servername"], m["name"], m["source"]), []) for m in members], tree)
         return {"run_id": int(hit["run_id"]), "cluster_no": int(hit["cluster_no"]),
                 "size": len(members), "scan_enum": members[0]["scan_enum"] if members else "",
+                "sensor_id": members[0]["sensor_id"] if members else "",
                 **_category_out(cat)}
 
     def run_out(set_name: str) -> Optional[dict]:
@@ -335,10 +337,11 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
                 [labels.get((m["servername"], m["name"], m["source"]), []) for m in members], tree)
             feats = rep_feats.get(rep["record_id"])
             ch = _show_channel(feats)
-            out.append({"cluster_no": no, "scan_enum": rep["scan_enum"], "size": len(members),
+            out.append({"cluster_no": no, "scan_enum": rep["scan_enum"], "sensor_id": rep["sensor_id"],
+                        "size": len(members),
                         "min_score": _r(min(m["score"] for m in members)),
                         "representative": _record_ref(rep), "channel": ch,
-                        "path": shape.normalized_paths(feats, [ch]).get(ch) if ch else None,
+                        "profile": shape.normalized_profiles(feats, [ch]).get(ch) if ch else None,
                         **_category_out(cat)})
         return {"run": run, "pool": pool_total, "clusters": out, "job": jobs_state.get(set_name)}
 
@@ -394,11 +397,11 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
         ch = _show_channel(members[0]["features"])
         return {
             "run_id": int(run["id"]), "cluster_no": cluster_no, "scan_enum": members[0]["scan_enum"],
-            "size": len(members), "channel": ch,
+            "sensor_id": members[0]["sensor_id"], "size": len(members), "channel": ch,
             **_category_out(shape.cluster_category(member_labels, tree)),
             "members": [{**_record_ref(m), "score": _r(m["score"]), "representative": m["representative"],
                          "labels": _labels_out(tree, ids),
-                         "path": shape.normalized_paths(m["features"], [ch]).get(ch) if ch else None}
+                         "profile": shape.normalized_profiles(m["features"], [ch]).get(ch) if ch else None}
                         for m, ids in zip(members, member_labels)],
         }
 
@@ -412,37 +415,43 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
             return row["features"], row
         f = files.get(server_id, set_name, name)
         [rec] = pool_rows(f, [f.find(source)])
-        return rec["features"], {"scan_enum": rec["scan_enum"], "record_id": None}
+        return rec["features"], {"scan_enum": rec["scan_enum"], "sensor_id": rec["sensor_id"], "record_id": None}
 
     @app.get("/clusters/map")
-    def cluster_map(set_name: str = "dump", scan_enum: Optional[str] = None,
+    def cluster_map(set_name: str = "dump", scan_enum: Optional[str] = None, sensor_id: Optional[str] = None,
                     server_id: Optional[int] = None, name: Optional[str] = None,
                     source: Optional[str] = None):
-        """최신 묶음 결과의 2D 지도 한 장(스캔 종류 하나) + 지금 기록의 자리."""
+        """최신 묶음 결과의 2D 지도 한 장(묶음 범위 = 스캔 종류 · 센서 하나) + 지금 기록의 자리."""
         run = store.latest_run(set_name)
         if run is None:
             raise KeyError("아직 묶은 적이 없다 — 「다시 묶기」를 먼저")
         run_id = int(run["id"])
         kinds = store.map_kinds(run_id)
         target = None
-        target_kind = None
+        target_group: Optional[tuple[str, str]] = None
         feats = None
         trow = None
         if server_id is not None and name and source:
             feats, trow = target_features(set_name, server_id, name, source)
-            target_kind = str(trow["scan_enum"] or "")
-        kind = scan_enum if scan_enum is not None else (
-            target_kind if target_kind is not None else (kinds[0]["scan_enum"] if kinds else ""))
+            target_group = (str(trow["scan_enum"] or ""), str(trow.get("sensor_id") or ""))
+        if scan_enum is not None:
+            group = (scan_enum, sensor_id or "")
+        elif target_group is not None:
+            group = target_group
+        else:
+            group = (kinds[0]["scan_enum"], kinds[0]["sensor_id"]) if kinds else ("", "")
+        key = shape.group_key(*group)
+        maps = run["maps"] or {}
         tree = store.tree()
         labels = store.labels_by_record(set_name=set_name)
 
-        if feats is not None and target_kind == kind:
+        if feats is not None and target_group == group:
             hit = store.record_point(run_id, trow["record_id"]) if trow.get("record_id") else None
             if hit is not None:
                 target = {"x": round(hit["x"], 4), "y": round(hit["y"], 4), "cluster_no": hit["cluster_no"],
                           "record_id": trow["record_id"], "in_run": True}
-            elif kind in (run["maps"] or {}):
-                proj = run["maps"][kind]
+            elif key in maps:
+                proj = maps[key]
                 lf = store.features_of(proj["landmarks"])
                 x, y = shape.project_features(proj, feats, [lf[i] for i in proj["landmarks"] if i in lf])
                 target = {"x": round(x, 4), "y": round(y, 4), "cluster_no": None,
@@ -450,7 +459,7 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
 
         clusters: dict[int, dict] = {}
         points = []
-        for p in store.map_points(run_id, kind):
+        for p in store.map_points(run_id, *group):
             no = p["cluster_no"]
             points.append({"id": p["record_id"], "x": round(p["x"], 4), "y": round(p["y"], 4),
                            "c": no, "l": bool(p["labelled"])})
@@ -462,15 +471,17 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
                 [labels.get((m["servername"], m["name"], m["source"]), []) for m in ps], tree)["category"]
             cl_out.append({"cluster_no": no, "size": len(ps),
                            "category": None if cat is None else cat["path"]})
-        return {"run_id": run_id, "scan_enum": kind,
-                "kinds": [{"scan_enum": k["scan_enum"], "n": k["n"]} for k in kinds],
+        return {"run_id": run_id, "scan_enum": group[0], "sensor_id": group[1],
+                "kinds": [{"scan_enum": k["scan_enum"], "sensor_id": k["sensor_id"], "n": k["n"]} for k in kinds],
                 "points": points, "clusters": cl_out, "target": target,
-                "target_kind": target_kind, "has_map": kind in (run["maps"] or {})}
+                "target_kind": None if target_group is None else target_group[0],
+                "target_sensor": None if target_group is None else target_group[1],
+                "has_map": key in maps}
 
     @app.get("/records/{record_id}")
     def record_detail(record_id: int, set_name: str = "dump", vs_server_id: Optional[int] = None,
                       vs_name: Optional[str] = None, vs_source: Optional[str] = None):
-        """풀의 기록 하나 — 지도에서 누른 점의 상세. `vs_*` 를 주면 그 기록과의 유사도와 두 곡선."""
+        """풀의 기록 하나 — 지도에서 누른 점의 상세. `vs_*` 를 주면 그 기록과의 유사도와 두 기록의 단면 · 칸."""
         r = store.get_record(record_id)
         tree = store.tree()
         ids = store.label_of(set_name=r["set_name"], servername=r["servername"], name=r["name"],
@@ -480,12 +491,12 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
         out = {**_record_ref(r), "seen_at": r["seen_at"], "labels": _labels_out(tree, ids),
                "cluster_no": point["cluster_no"] if point else None,
                "run_id": int(run["id"]) if run else None,
-               "paths": shape.normalized_paths(r["features"]), "vs": None}
+               "profiles": shape.normalized_profiles(r["features"], grid=True), "vs": None}
         if vs_server_id is not None and vs_name and vs_source:
             feats, _ = target_features(r["set_name"], vs_server_id, vs_name, vs_source)
             sim = shape.similarity(feats, r["features"])
             out["vs"] = {"similarity": None if sim is None else _sim_out(sim),
-                         "paths": shape.normalized_paths(feats)}
+                         "profiles": shape.normalized_profiles(feats, grid=True)}
         return out
 
     app.get("/clusters/{cluster_no}")(get_cluster)

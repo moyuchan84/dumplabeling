@@ -79,14 +79,15 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
 
 ```json
 { "sig": "…", "source": "…", "scan_enum": "FINEHORVERT_SCAN", "compared": 12,
-  "target_paths": { "A": [ -0.41, … 128개 ] },
+  "target_profiles": { "A": { "x": [ -0.41, … 16개 ], "z": [ … 16개 ] } },
   "matches": [
     { "id": 7, "servername": "scanner-c", "server_id": 3, "name": "server3.tdf", "source": "…",
       "scan_enum": "FINEHORVERT_SCAN", "meta": { … },
       "labels": [ { "id": 3, "level": 3, "path": "신호 이상 › 피크 › 단일 피크", "case_id": 1 } ],
       "similarity": { "score": 0.91, "d1": 0.94, "d2": 0.88, "scale": 1.8,
-                      "by_channel": { "A": { "score": 0.95, "d1": 0.97, "d2": 0.93, "scale": 1.7 } } },
-      "paths": { "A": [ … 128개, z-score ] } } ],
+                      "by_channel": { "A": { "score": 0.95, "d1": 0.97, "d2": 0.93,
+                                               "dx": 0.98, "dz": 0.96, "scale": 1.7 } } },
+      "profiles": { "A": { "x": [ … 16개 ], "z": [ … 16개 ] } } } ],
   "levels": {
     "1": [ { "label_id": 1, "path": "신호 이상", "score": 0.93, "count": 6, "case_id": null, "suggested": true } ],
     "2": [ { "label_id": 2, "path": "신호 이상 › 피크", "score": 0.88, "count": 4, "case_id": null, "suggested": true } ],
@@ -99,7 +100,11 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
 - `score` 는 -1 ~ 1 (상관계수). `scale` = 상대 기록의 크기 / 이 기록의 크기 — 점수에는 섞지 않습니다.
 - **`suggested` 판단은 서버가 합니다.** 화면은 문턱값을 모릅니다. 단계 L 은 위 단계가 확실할 때만 확실할 수 있고,
   `suggestion` 은 확실한 가장 깊은 단계입니다(없으면 `null`).
-- `same_scan_only: true`(기본)면 같은 `scan_enum` 의 기록끼리만 비교합니다 — 스캔 경로가 다르면 1D 비교가 무의미합니다.
+- `same_scan_only: true`(기본)면 같은 `scan_enum` 의 기록끼리만 비교합니다 — 스캔 종류가 다르면 다른 측정입니다(선 스캔은 경로가 다르면 곡선 비교가 무의미).
+- 면 스캔(16×16 칸이 있는 채널)의 `d1` 은 **X 단면(열 평균) · Z 단면(행 평균)** 상관의 평균(`dx` · `dz`), `d2` 는 칸
+  상관입니다. 셋은 **각자** z-score 합니다. 선 스캔은 `d1` = 측정 순서 곡선(128점) 하나, `d2` 없음. 면과 선은 비교하지
+  않습니다. `profiles` · `profile` 은 그 재료를 각자 정규화한 것입니다 — 면 스캔은 `{x, z}`(기록 상세만 `grid` 까지),
+  선 스캔은 `{line}`. 빈 자리는 `null`.
 
 같은 응답에 두 칸이 더 옵니다.
 
@@ -140,7 +145,7 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
 
 ## 묶음 (클러스터)
 
-라벨이 있든 없든 scanlabel 이 **본 기록 전부**(기록 풀)를 모양으로 묶습니다. 같은 스캔 종류끼리만 묶고,
+라벨이 있든 없든 scanlabel 이 **본 기록 전부**(기록 풀)를 모양으로 묶습니다. **같은 스캔 종류 · 같은 센서**(`scan_enum` + `sensor_id`)끼리만 묶고,
 구성원 모두가 묶음의 **대표 기록**과 직접 0.8 이상 닮았습니다. 3건보다 작은 무리는 「묶이지 않음」입니다.
 분류(`category`)는 그 묶음의 **라벨된 구성원**이 합의한 가장 깊은 단계입니다(60% 이상 + 2위보다 많음 + 위 단계의
 자식) — 라벨된 구성원이 없거나 갈리면 `null`. 이 판단도 서버가 하고, 화면은 옮겨 적습니다.
@@ -152,10 +157,10 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
            "unclustered": 41, "truncated": 0, "threshold": 0.8, "min_size": 3, "stale": false },
   "pool": 312,
   "clusters": [
-    { "cluster_no": 1, "scan_enum": "FINEHORVERT_SCAN", "size": 58, "min_score": 0.81,
+    { "cluster_no": 1, "scan_enum": "FINEHORVERT_SCAN", "sensor_id": "2", "size": 58, "min_score": 0.81,
       "representative": { "record_id": 12, "servername": "scanner-a", "server_id": 1, "name": "…",
                           "source": "…", "sig": "…", "scan_enum": "…", "meta": { … } },
-      "channel": "A", "path": [ … 128개, z-score ],
+      "channel": "A", "profile": { "x": [ … 16개 ], "z": [ … 16개 ] },
       "labelled": 6, "unlabelled": 52,
       "levels": { "1": [ { "label_id": 1, "path": "신호 이상", "count": 6, "share": 1.0, "case_id": null, "agreed": true } ], "2": [ … ], "3": [ … ] },
       "category": { "label_id": 3, "level": 3, "path": "…", "count": 5, "share": 0.833, "case_id": 1, "agreed": true } } ] }
@@ -171,56 +176,58 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
 다시 묶기를 **시작**하고 끝나기를 기다리지 않습니다 → `202 { "job": { "state": "running", "started_at": "…",
 "finished_at": null, "error": null } }`. 이미 돌고 있으면 그 작업을 그대로 돌려줍니다(두 번 돌지 않음).
 진행은 `GET /clusters` 의 `job` 으로 봅니다 — `running` → `done` 이면 목록이 새 결과, `failed` 면 `error` 에 이유가
-있고 목록은 이전 결과입니다. 스캔 종류마다 최근 800건까지 — 2,400건에 20초 안팎. 같은 일을
+있고 목록은 이전 결과입니다. 묶음 범위(스캔 종류 · 센서)마다 최근 800건까지 — 2,400건에 20초 안팎. 같은 일을
 `python -m scanlabel.application.jobs cluster` 로도 돌립니다(그 진행은 API 의 `job` 에 보이지 않고, 결과만 보입니다).
 
 > 요청 하나에 기다리게 하던 첫 판은 18초에서 앞단 프록시가 연결을 끊었습니다(2026-10-15) — 그래서 뒤에서 돕니다.
 
-### `GET /clusters/map?set_name=dump&scan_enum=&server_id=&name=&source=` — 묶음 지도
+### `GET /clusters/map?set_name=dump&scan_enum=&sensor_id=&server_id=&name=&source=` — 묶음 지도
 
-스캔 종류 하나의 기록들을 2D 에 놓은 것 — **가까울수록 닮았습니다**(근사: 기준점 24개에 대한 거리로 놓는다).
-`server_id`·`name`·`source` 를 주면 그 기록(지금 화면의 기록)의 자리도 줍니다. `scan_enum` 을 빼면 그 기록의 종류,
-그것도 없으면 가장 많은 종류.
+묶음 범위(스캔 종류 · 센서) 하나의 기록들을 2D 에 놓은 것 — **가까울수록 닮았습니다**(근사: 기준점 24개에 대한 거리로 놓는다).
+`server_id`·`name`·`source` 를 주면 그 기록(지금 화면의 기록)의 자리도 줍니다. `scan_enum`(+`sensor_id`, 빼면 센서 없음 `""`)을
+빼면 그 기록의 범위, 그것도 없으면 가장 많은 범위.
 
 ```json
-{ "run_id": 4, "scan_enum": "FINEHORVERT_SCAN", "has_map": true,
-  "kinds": [ { "scan_enum": "FINEHORVERT_SCAN", "n": 800 }, { "scan_enum": "COARSEHORVERT_SCAN", "n": 800 } ],
+{ "run_id": 4, "scan_enum": "FINEHORVERT_SCAN", "sensor_id": "2", "has_map": true,
+  "kinds": [ { "scan_enum": "FINEHORVERT_SCAN", "sensor_id": "2", "n": 800 },
+             { "scan_enum": "FINEHORVERT_SCAN", "sensor_id": "5", "n": 412 } ],
   "points": [ { "id": 12, "x": -0.2573, "y": 0.1102, "c": 2, "l": true } ],
   "clusters": [ { "cluster_no": 2, "size": 534, "category": "ID-0603 › WS › IFM-MIOB" } ],
   "target": { "x": 0.5604, "y": 0.0, "cluster_no": null, "record_id": 1, "in_run": false },
-  "target_kind": "FINEHORVERT_SCAN" }
+  "target_kind": "FINEHORVERT_SCAN", "target_sensor": "2" }
 ```
 
 - 점 = `id`(풀의 기록 id — `GET /records/{id}`) · 자리 · `c` 묶음 번호(묶이지 않음 = `null`) · `l` 라벨 있음.
 - `target.in_run: false` = 이번 묶음 뒤에 본 기록이거나 상한에 걸려 빠진 기록 — 같은 투영식으로 놓았고 묶음 번호는 없다.
-  그 기록의 종류가 고른 지도와 다르면 `target: null`(`target_kind` 로 알 수 있다).
-- `has_map: false` = 0004 이전에 묶은 결과 — 다시 묶으면 생깁니다. 아직 묶은 적이 없으면 404.
+  그 기록의 범위가 고른 지도와 다르면 `target: null`(`target_kind` · `target_sensor` 로 알 수 있다).
+- `has_map: false` = 0005 이전에 묶은 결과(지도가 스캔 종류 단위였다) — 다시 묶으면 생깁니다. 아직 묶은 적이 없으면 404.
 
 ### `GET /records/{record_id}?set_name=dump&vs_server_id=&vs_name=&vs_source=` — 기록 상세
 
-지도에서 누른 점의 기록. `vs_*` 를 주면 그 기록(지금 화면의 기록)과의 유사도와 두 곡선이 `vs` 에 옵니다.
+지도에서 누른 점의 기록. `vs_*` 를 주면 그 기록(지금 화면의 기록)과의 유사도와 그 기록의 단면 · 칸이 `vs` 에 옵니다.
+여기서만 `profiles` 에 16×16 칸(`grid`, 256개, 행 = Z · 열 = X)이 함께 옵니다.
 
 ```json
 { "record_id": 12, "servername": "…", "server_id": 1, "name": "…", "source": "…", "sig": "…", "scan_enum": "…",
   "meta": { … }, "seen_at": "…", "labels": [ … ], "cluster_no": 2, "run_id": 4,
-  "paths": { "A": [ … 128개, z-score ] },
+  "profiles": { "A": { "x": [ … 16개 ], "z": [ … 16개 ], "grid": [ … 256개 ] } },
   "vs": { "similarity": { "score": 0.88, "d1": 0.85, "d2": 0.9, "scale": 1.3, "by_channel": { … } },
-          "paths": { "A": [ … ] } } }
+          "profiles": { "A": { "x": [ … ], "z": [ … ], "grid": [ … ] } } } }
 ```
 
 없는 id 는 404.
 
 ### `GET /clusters/{cluster_no}?set_name=dump&run_id=`
 
-묶음 하나의 구성원 — 대표 먼저, 그다음 대표와의 점수 순. 구성원마다 `labels`(붙은 라벨)와 겹쳐 그릴 `path`
-(묶음의 `channel`, z-score 128점).
+묶음 하나의 구성원 — 대표 먼저, 그다음 대표와의 점수 순. 구성원마다 `labels`(붙은 라벨)와 겹쳐 그릴 `profile`
+(묶음의 `channel` 의 X · Z 단면).
 
 ```json
 { "run_id": 4, "cluster_no": 2, "scan_enum": "…", "size": 17, "channel": "A",
   "labelled": 5, "unlabelled": 12, "levels": { … }, "category": { … },
   "members": [ { "record_id": 12, "servername": "…", "server_id": 1, "name": "…", "source": "…", "sig": "…",
                  "scan_enum": "…", "meta": { … }, "score": 1.0, "representative": true,
-                 "labels": [ … ], "path": [ … ] } ] }
+                 "labels": [ … ], "profile": { "x": [ … ], "z": [ … ] } } ] }
 ```
 
 `run_id` 가 최신 결과와 다르면 422(「그새 묶음이 다시 계산됐다」), 묶은 적이 없거나 없는 번호면 404.

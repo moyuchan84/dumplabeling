@@ -106,13 +106,26 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 
 ## Similarity (SL-SIM)
 
-- `SL-SIM-1` Each side is z-scored (offset and gain removed) and compared by Pearson correlation — 1D over
-  the 128 points, 2D over the cells both sides have (at least `MIN_OVERLAP` = 16). Channel score =
-  `W_1D`·1D + `W_2D`·2D over what is available; record score = mean over common channels.
-  [test: "test_same_shape_scores_near_one_across_density_gain_and_offset" · "test_different_shapes_score_low"]
-- `SL-SIM-2` **1D compares only records that walked the same trajectory.** A raster with a different row
-  count is a different index order, so its 1D score is meaningless while its 2D score still holds. That is
-  why the default scope is **the same `scan_enum`**. [test: "test_1d_needs_the_same_trajectory_but_2d_does_not"]
+- `SL-SIM-1` What a channel is compared by depends on what it is, and **every material is z-scored on its own**
+  (offset and gain removed) before a Pearson correlation. An **area scan** (it has the 16×16 cells): 1D = the
+  mean of the **X profile** (column means of the cells) and **Z profile** (row means) correlations, each over the
+  slots both sides have (at least `PROFILE_MIN` = 8); 2D = the cells both sides have (at least `MIN_OVERLAP` = 16).
+  A **line scan** (no cells, `SL-FEAT-4`): 1D = the 128-point scan-order curve. An area scan and a line scan are
+  not compared. Channel score = `W_1D`·1D + `W_2D`·2D over what is available; record score = mean over common
+  channels. Profiles are derived from the stored cells, so this needs no source data and no `FEATURE_VERSION`
+  bump (`SL-FEAT-1`). The screen draws the same materials (`profiles`, README.api.md).
+  [test: "test_same_shape_scores_near_one_across_density_gain_and_offset" · "test_different_shapes_score_low" · "test_x_profile_z_profile_and_grid_are_normalised_each_on_its_own" · "test_a_line_scan_and_an_area_scan_are_not_compared"]
+  Rejected (2026-10-28): the scan-order curve for area scans too. Every pooled record (7,248 on 2026-10-28,
+  COARSE/FINE/MEDIUMHORVERT_SCAN) is an area scan; bin-averaging 320–2,400 points in measurement order into 128
+  mixed the row turns into the bins, so the 1D half of the score — and the curve the screen drew — carried
+  no shape (the user: 「1d / 2d 를 한꺼번에 normalize 하면 안될거같은데 그렇게 하니깐 그래프가 뭉개지는거같아서」 —
+  normalising 1D and 2D together seems wrong; it smears the graph). Validation: `jobs eval` (leave-one-out,
+  535 labels, `same_scan_only`) top-1/top-3 = 0.998 at all three levels both before and after; the run went
+  134 s → 92 s.
+- `SL-SIM-2` **A line scan's 1D compares only records that walked the same trajectory** — its curve is in index
+  order. An area scan's profiles do not depend on the order (a raster with a different row count matches).
+  The default scope stays **the same `scan_enum`**: another kind is another measurement.
+  [test: "test_a_2d_scan_compares_by_x_and_z_profiles_not_by_scan_order"]
 - `SL-SIM-3` A flat channel (range ≤ `FLAT_REL` of its magnitude) is not correlated: flat vs flat = 1,
   flat vs anything else = 0 — normalising a flat signal turns noise into a shape.
   [test: "test_flat_matches_flat_and_nothing_else"]
@@ -158,7 +171,7 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 - `SL-POOL-2` `jobs index` follows fleet's `GET /generations` with its own cursor (`index_cursors`), reads each new
   file **from cache only** and puts its records in the pool; a file whose cache is gone is reported as `skipped`.
   It is the periodic way to include files nobody opened. [test: "test_index_follows_the_generation_cursor_without_ftp"]
-- `SL-POOL-3` A pool row is rewritten only when its generation, feature version or scan kind changes; that rewrite
+- `SL-POOL-3` A pool row is rewritten only when its generation, feature version, scan kind or sensor changes; that rewrite
   takes a new `seq`. Re-opening an unchanged file changes nothing — so it does not make the clusters stale.
 - `SL-POOL-4` `jobs refeature` rebuilds stale pool rows as well as labelled ones: one comparison definition across
   the pool.
@@ -175,10 +188,15 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   representative **directly**, so a cluster cannot chain unlike shapes together; ties break by neighbour score sum,
   then id — deterministic.
   [test: "test_clusters_group_like_shapes_and_leave_the_rest_unclustered" · "test_clusters_never_mix_scan_kinds"]
-- `SL-CLU-3` Clusters never cross scan kinds (`SL-SIM-2`). Each kind is capped at the `CLUSTER_MAX_N` (800) most
+- `SL-CLU-3` Clusters never cross a **group = (scan kind, sensor)** (`SL-SIM-2`; migration `0005`). Different
+  scan kinds walked different trajectories; different sensors on one kind read on a different baseline, so mixing
+  them makes "a different sensor" look like "a different shape" (2026-10-28, the user: 「실제 clustering 할때
+  데이터에서 sensor_id + scan_enum 까지 grouping 해야할거같은데」 — cluster by sensor_id + scan_enum). The sensor is
+  `meta.sensor_id` as text, `""` when absent, stored as `scan_records.sensor_id`. Each group is capped at the `CLUSTER_MAX_N` (800) most
   recently changed records — the comparison is n², measured at ≈ 6 s for 800 (`math.sumprod`, prepared z-scores,
   `shape.prepare`, which scores exactly like the raw snapshot); the cut is reported as `truncated`.
-  [test: "test_prepared_features_score_exactly_like_raw_snapshots"]
+  [test: "test_prepared_features_score_exactly_like_raw_snapshots" · "test_clusters_never_mix_sensors_of_one_scan_kind" · "test_clusters_and_the_map_are_per_scan_kind_and_sensor"]
+  Not yet: the suggestion scope (`same_scan_only`, `SL-SIM-2`) is still the scan kind alone.
 - `SL-CLU-4` A cluster's **category** is read off its labelled members per level, each label counting for its
   ancestors (`SL-SUG-1`): a level agrees when its top node holds ≥ `CLUSTER_AGREE` (0.60) of the labelled members,
   more than the runner-up, and is a child of the agreed node one level up. The category is the deepest agreed
@@ -201,7 +219,7 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 
 ## Cluster map (SL-MAP)
 
-- `SL-MAP-1` A cluster run also places every record it covered — clustered or not — in 2D, **per scan kind**
+- `SL-MAP-1` A cluster run also places every record it covered — clustered or not — in 2D, **per group (scan kind, sensor)**
   (`cluster_points`, migration `0004`): near = alike. Method: landmark MDS — `MAP_LANDMARKS` (24) records picked
   max-min apart by distance `1 − score`, classical MDS on those, every other record projected from its distances to
   the landmarks only (24 comparisons each). It is an approximation and is said to be one.
@@ -210,7 +228,8 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   **outside the run** — seen after it, or cut by the cap — is placed on the same map without re-running: its features
   (from the pool, else fleet's cache) against the landmarks. Such a target says `in_run: false` and has no cluster.
   [test: "test_a_record_outside_the_run_lands_where_its_twin_is" · "test_the_map_places_every_record_and_the_one_on_screen"]
-- `SL-MAP-3` `GET /clusters/map` answers one scan kind (default: the asked record's, else the largest): points
+- `SL-MAP-3` `GET /clusters/map` answers one group (`scan_enum` + `sensor_id`; default: the asked record's, else the
+  largest; a run from before `0005` keyed its maps by scan kind alone and answers `has_map: false`): points
   `{id, x, y, c, l}` (cluster number or null, labelled or not), each cluster's size and agreed category, and the asked
   record's place. `GET /records/{id}` is a pool record's detail — labels, cluster, normalised curves, and with `vs_*`
   its similarity to the record on screen. A group under 3 records has no map.
