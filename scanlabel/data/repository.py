@@ -260,23 +260,25 @@ class Store:
         with self._conn() as c, c.transaction(), c.cursor() as cur:
             cur.executemany(
                 "INSERT INTO scan_records (servername, server_id, set_name, name, source, sig, scan_enum,"
-                " meta, feature_version, features, seen_at, updated_at)"
-                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                " sensor_id, meta, feature_version, features, seen_at, updated_at)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
                 " ON CONFLICT ON CONSTRAINT scan_records_record_key DO UPDATE SET"
                 "  server_id = EXCLUDED.server_id, sig = EXCLUDED.sig, scan_enum = EXCLUDED.scan_enum,"
+                "  sensor_id = EXCLUDED.sensor_id,"
                 "  meta = EXCLUDED.meta, feature_version = EXCLUDED.feature_version,"
                 "  features = EXCLUDED.features, updated_at = EXCLUDED.updated_at,"
                 "  seq = nextval('scan_records_seq')"
                 # 같은 세대 · 같은 특징 판이면 모양이 같다 — 쓰지 않는다(묶음이 낡았다고 말하지 않게).
-                " WHERE (scan_records.sig, scan_records.feature_version, scan_records.scan_enum)"
-                "  IS DISTINCT FROM (EXCLUDED.sig, EXCLUDED.feature_version, EXCLUDED.scan_enum)",
+                " WHERE (scan_records.sig, scan_records.feature_version, scan_records.scan_enum,"
+                "        scan_records.sensor_id)"
+                "  IS DISTINCT FROM (EXCLUDED.sig, EXCLUDED.feature_version, EXCLUDED.scan_enum, EXCLUDED.sensor_id)",
                 [(r["servername"], r["server_id"], r["set_name"], r["name"], r["source"], r["sig"],
-                  r["scan_enum"], Jsonb(r["meta"]), r["feature_version"], Jsonb(r["features"]), now, now)
+                  r["scan_enum"], r.get("sensor_id", ""), Jsonb(r["meta"]), r["feature_version"], Jsonb(r["features"]), now, now)
                  for r in rows])
         return len(rows)
 
     def pool(self, *, set_name: str, per_scan_limit: int) -> tuple[list[dict], int, int, int]:
-        """묶을 기록 — 스캔 종류마다 최근 것부터 `per_scan_limit` 개.
+        """묶을 기록 — 묶음 범위(스캔 종류, 센서)마다 최근 것부터 `per_scan_limit` 개.
 
         (행들, 전체 수, 잘린 수, 풀의 최대 seq). 한 트랜잭션에서 읽어 넷이 서로 맞는다.
         """
@@ -285,9 +287,9 @@ class Store:
             head = c.execute("SELECT count(*) AS n, COALESCE(max(seq), 0) AS seq FROM scan_records"
                              " WHERE set_name = %s", (set_name,)).fetchone()
             rows = c.execute(
-                "SELECT id, scan_enum, features FROM ("
-                "  SELECT id, scan_enum, features, row_number() OVER"
-                "   (PARTITION BY scan_enum ORDER BY seq DESC, id DESC) AS rn"
+                "SELECT id, scan_enum, sensor_id, features FROM ("
+                "  SELECT id, scan_enum, sensor_id, features, row_number() OVER"
+                "   (PARTITION BY scan_enum, sensor_id ORDER BY seq DESC, id DESC) AS rn"
                 "  FROM scan_records WHERE set_name = %s) t WHERE rn <= %s ORDER BY id",
                 (set_name, per_scan_limit)).fetchall()
         total = int(head["n"])
@@ -340,7 +342,8 @@ class Store:
                          maps: Optional[dict] = None, points: Optional[list[tuple]] = None) -> int:
         """묶음 결과 한 벌을 저장한다. 그 set 의 이전 결과는 지운다 — 최신 것 하나만 있다.
 
-        `maps` = 스캔 종류 → 투영식, `points` = (record_id, scan_enum, x, y) — 묶음 지도(SL-MAP).
+        `maps` = 묶음 범위 키(`shape.group_key`) → 투영식, `points` = (record_id, scan_enum, sensor_id, x, y)
+        — 묶음 지도(SL-MAP).
         """
         with self._conn() as c, c.transaction():
             c.execute("DELETE FROM cluster_runs WHERE set_name = %s", (set_name,))
@@ -354,13 +357,14 @@ class Store:
             if points:
                 with c.cursor() as cur:
                     cur.executemany(
-                        "INSERT INTO cluster_points (run_id, record_id, scan_enum, x, y) VALUES (%s,%s,%s,%s,%s)",
+                        "INSERT INTO cluster_points (run_id, record_id, scan_enum, sensor_id, x, y)"
+                        " VALUES (%s,%s,%s,%s,%s,%s)",
                         [(run_id, *p) for p in points])
             with c.cursor() as cur:
                 cur.executemany(
-                    "INSERT INTO cluster_members (run_id, cluster_no, record_id, scan_enum, score,"
-                    " representative) VALUES (%s,%s,%s,%s,%s,%s)",
-                    [(run_id, no, m["id"], cl["scan_enum"], m["score"], m["representative"])
+                    "INSERT INTO cluster_members (run_id, cluster_no, record_id, scan_enum, sensor_id, score,"
+                    " representative) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                    [(run_id, no, m["id"], cl["scan_enum"], cl.get("sensor_id", ""), m["score"], m["representative"])
                      for no, cl in enumerate(result["clusters"], start=1) for m in cl["members"]])
         return run_id
 
@@ -372,7 +376,7 @@ class Store:
     def run_members(self, run_id: int, *, cluster_no: Optional[int] = None,
                     with_features: bool = False) -> list[dict]:
         """묶음 구성원 + 풀의 기록 정보. 묶음 번호 → 대표 먼저 → 점수 순."""
-        cols = ("m.cluster_no, m.scan_enum, m.score, m.representative, r.id AS record_id, r.servername,"
+        cols = ("m.cluster_no, m.scan_enum, m.sensor_id, m.score, m.representative, r.id AS record_id, r.servername,"
                 " r.server_id, r.set_name, r.name, r.source, r.sig, r.meta")
         if with_features:
             cols += ", r.features"
@@ -386,7 +390,7 @@ class Store:
             return c.execute(q + " ORDER BY m.cluster_no, m.representative DESC, m.score DESC, r.id",
                              args).fetchall()
 
-    def map_points(self, run_id: int, scan_enum: str) -> list[dict]:
+    def map_points(self, run_id: int, scan_enum: str, sensor_id: str) -> list[dict]:
         """지도의 점 — 자리 · 묶음 번호(없으면 None) · 라벨 여부 · 기록 머리."""
         with self._conn() as c:
             return c.execute(
@@ -395,25 +399,26 @@ class Store:
                 "   AND l.set_name = r.set_name AND l.name = r.name AND l.source = r.source) AS labelled"
                 " FROM cluster_points p JOIN scan_records r ON r.id = p.record_id"
                 " LEFT JOIN cluster_members m ON m.run_id = p.run_id AND m.record_id = p.record_id"
-                " WHERE p.run_id = %s AND p.scan_enum = %s ORDER BY p.record_id",
-                (run_id, scan_enum)).fetchall()
+                " WHERE p.run_id = %s AND p.scan_enum = %s AND p.sensor_id = %s ORDER BY p.record_id",
+                (run_id, scan_enum, sensor_id)).fetchall()
 
     def map_kinds(self, run_id: int) -> list[dict]:
         with self._conn() as c:
-            return c.execute("SELECT scan_enum, count(*) AS n FROM cluster_points WHERE run_id = %s"
-                             " GROUP BY scan_enum ORDER BY count(*) DESC, scan_enum", (run_id,)).fetchall()
+            return c.execute("SELECT scan_enum, sensor_id, count(*) AS n FROM cluster_points WHERE run_id = %s"
+                             " GROUP BY scan_enum, sensor_id ORDER BY count(*) DESC, scan_enum, sensor_id",
+                             (run_id,)).fetchall()
 
     def find_record(self, *, set_name: str, servername: str, name: str, source: str) -> Optional[dict]:
         with self._conn() as c:
             return c.execute(
-                "SELECT id AS record_id, servername, server_id, set_name, name, source, sig, scan_enum, meta,"
+                "SELECT id AS record_id, servername, server_id, set_name, name, source, sig, scan_enum, sensor_id, meta,"
                 " features FROM scan_records WHERE set_name = %s AND servername = %s AND name = %s"
                 " AND source = %s", (set_name, servername, name, source)).fetchone()
 
     def get_record(self, record_id: int) -> dict:
         with self._conn() as c:
             row = c.execute(
-                "SELECT id AS record_id, servername, server_id, set_name, name, source, sig, scan_enum, meta,"
+                "SELECT id AS record_id, servername, server_id, set_name, name, source, sig, scan_enum, sensor_id, meta,"
                 " features, seen_at, updated_at FROM scan_records WHERE id = %s", (record_id,)).fetchone()
         if row is None:
             raise KeyError(f"없는 기록 id: {record_id}")
@@ -422,7 +427,7 @@ class Store:
     def record_point(self, run_id: int, record_id: int) -> Optional[dict]:
         with self._conn() as c:
             return c.execute(
-                "SELECT p.x, p.y, p.scan_enum, m.cluster_no FROM cluster_points p"
+                "SELECT p.x, p.y, p.scan_enum, p.sensor_id, m.cluster_no FROM cluster_points p"
                 " LEFT JOIN cluster_members m ON m.run_id = p.run_id AND m.record_id = p.record_id"
                 " WHERE p.run_id = %s AND p.record_id = %s", (run_id, record_id)).fetchone()
 

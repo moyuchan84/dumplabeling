@@ -2,11 +2,15 @@
 
 기록 한 건 = dump raw 스캔 하나(`value{채널: [..]}` + `xyz{x,z}`). 채널마다
 
-- **1D**: 스캔 순서 배열을 `PATH_N` 점으로 줄인 것(구간 평균; 짧으면 선형 보간).
-- **2D**: (x, z) 를 0–1 평면에 놓고 `GRID_N`×`GRID_N` 칸 평균(빈 칸은 None).
+- **측정 순서 곡선**: 스캔 순서 배열을 `PATH_N` 점으로 줄인 것(구간 평균; 짧으면 선형 보간).
+- **칸**: (x, z) 를 0–1 평면에 놓고 `GRID_N`×`GRID_N` 칸 평균(빈 칸은 None).
 
-을 **정규화 전** 값으로 스냅샷에 남긴다. 정규화(z-score)와 비교는 `similarity` 가 그때그때 한다 —
-정규화 방식을 바꾸는 변경은 원본 없이 스냅샷만으로 다시 계산된다.
+을 **정규화 전** 값으로 스냅샷에 남긴다. 비교 재료 고르기 · 정규화(z-score) · 비교는 `similarity` 가
+그때그때 한다 — 그 방식을 바꾸는 변경은 원본 없이 스냅샷만으로 다시 계산된다.
+
+- 면 스캔(칸이 있다): 1D = **X 단면 · Z 단면**(칸의 열 · 행 평균), 2D = 칸. 셋을 **각자** 정규화한다.
+  측정 순서 곡선은 쓰지 않는다 — 면을 한 줄로 펴면 행이 꺾이는 자리가 섞여 모양이 뭉개진다.
+- 선 스캔(칸이 없다): 1D = 측정 순서 곡선.
 
 문턱값 · 가중치는 **휴리스틱**이다. `evaluate`(leave-one-out 적중률)로 재고 여기서만 고친다.
 """
@@ -25,6 +29,7 @@ GRID_N = 16
 W_1D = 0.5               # 채널 점수 = 가중 평균(있는 쪽만)
 W_2D = 0.5
 MIN_OVERLAP = 16         # 2D 상관을 낼 최소 공통 칸 수
+PROFILE_MIN = 8          # 단면(X · Z) 상관을 낼 최소 공통 자리 수 (단면 길이 = GRID_N)
 FLAT_REL = 1e-6          # 범위가 크기의 이 비율 이하면 평평한 신호
 
 SUGGEST_MIN = 0.80       # 이 점수 이상이어야 「제안」
@@ -35,7 +40,7 @@ CASE_TOP = 5             # 유사 사례 목록에 싣는 사례 수
 
 CLUSTER_MIN = 0.80       # 묶음의 대표 기록과 이 점수 이상이어야 그 묶음의 구성원
 CLUSTER_MIN_SIZE = 3     # 이보다 작은 무리는 묶음이 아니다(「묶이지 않음」)
-CLUSTER_MAX_N = 800      # 스캔 종류 하나에서 묶는 최대 기록 수(최근 것부터) — 쌍 비교가 n² 이다
+CLUSTER_MAX_N = 800      # 묶음 범위(스캔 종류 · 센서) 하나에서 묶는 최대 기록 수(최근 것부터) — 쌍 비교가 n² 이다
 CLUSTER_AGREE = 0.60     # 라벨된 구성원 중 이 비율 이상이 같은 노드여야 그 묶음의 분류
 MAP_LANDMARKS = 24       # 묶음 지도의 기준점 수 — 기록마다 이만큼만 비교해 2D 자리를 정한다
 
@@ -176,51 +181,71 @@ def _corr(a: list[float], b: list[float]) -> float:
     return _zcorr(zscore(a), zscore(b))
 
 
-def prepare(features: Mapping) -> dict:
-    """비교 준비 — 채널마다 z-score 를 한 번만 한다. 결과는 `similarity` 에 스냅샷 대신 넣을 수 있다.
+def profiles(grid: Optional[list]) -> Optional[dict]:
+    """2D 칸 평균 → 두 방향의 단면: x = 열마다의 평균(Z 로 평균), z = 행마다의 평균(X 로 평균).
 
-    값은 스냅샷 그대로 비교한 것과 **같다**: 1D 는 언제나 전 구간이고, 2D 는 빈 칸이 없을 때만
-    미리 정규화한다(빈 칸이 있으면 공통 칸이 상대마다 달라 그때그때 정규화해야 한다). 묶음처럼
-    한 기록을 수백 번 비교할 때 쓴다.
+    면 스캔을 측정 순서대로 한 줄로 펴면 행이 꺾이는 자리가 구간 평균에 섞여 모양이 뭉개진다 — 단면은
+    측정 순서와 무관하다. 스냅샷의 칸에서 만들므로 원본 없이 다시 계산된다. 빈 줄은 None.
+    """
+    if not grid or len(grid) != GRID_N * GRID_N:
+        return None
+
+    def mean(vals: list) -> Optional[float]:
+        have = [v for v in vals if v is not None]
+        return sum(have) / len(have) if have else None
+
+    return {"x": [mean([grid[r * GRID_N + c] for r in range(GRID_N)]) for c in range(GRID_N)],
+            "z": [mean(grid[r * GRID_N:(r + 1) * GRID_N]) for r in range(GRID_N)]}
+
+
+# 채널의 비교 재료: 선 스캔은 측정 순서 곡선(path) 하나, 면 스캔은 X 단면 · Z 단면 · 칸 — 서로 따로 정규화한다.
+_SEQ_MIN = {"path": 2, "x": PROFILE_MIN, "z": PROFILE_MIN, "grid": MIN_OVERLAP}
+
+
+def _pre(vals: list, min_n: int) -> Optional[tuple[bool, Optional[list[float]]]]:
+    """빈 자리 없는 배열은 (평평한가, z-score) 를 미리 — 빈 자리가 있으면 공통 자리가 상대마다 달라 그때그때."""
+    if len(vals) < min_n or any(v is None for v in vals):
+        return None
+    flat = _flat(vals)
+    return flat, None if flat else zscore(vals)
+
+
+def _prep_channel(ch: Mapping) -> dict:
+    grid = ch.get("grid")
+    p: dict[str, Any] = {"stats": ch.get("stats"), "two_d": bool(grid), "seq": {}, "pre": {}}
+    if grid:
+        p["seq"] = {"grid": grid, **(profiles(grid) or {})}
+    elif ch.get("path"):
+        p["seq"] = {"path": ch["path"]}
+    for k, vals in p["seq"].items():
+        p["pre"][k] = _pre(vals, _SEQ_MIN[k])
+    return p
+
+
+def prepare(features: Mapping) -> dict:
+    """비교 준비 — 채널마다 재료를 고르고 z-score 를 한 번만 한다. `similarity` 에 스냅샷 대신 넣을 수 있다.
+
+    값은 스냅샷 그대로 비교한 것과 **같다**: 빈 자리가 없는 배열만 미리 정규화한다(빈 자리가 있으면 공통
+    자리가 상대마다 달라 그때그때 정규화해야 한다). 묶음처럼 한 기록을 수백 번 비교할 때 쓴다.
     """
     if features.get("_prepared"):
         return dict(features)
-    out = {}
-    for key, ch in (features.get("channels") or {}).items():
-        path, grid = ch.get("path"), ch.get("grid")
-        p: dict[str, Any] = {"path": path, "grid": grid, "stats": ch.get("stats")}
-        if path:
-            p["pflat"] = _flat(path)
-            p["zp"] = None if p["pflat"] else zscore(path)
-        if grid and all(v is not None for v in grid):
-            p["gflat"] = _flat(grid)
-            p["zg"] = None if p["gflat"] else zscore(grid)
-        out[key] = p
-    return {"_prepared": True, "channels": out}
+    return {"_prepared": True,
+            "channels": {k: _prep_channel(ch) for k, ch in (features.get("channels") or {}).items()}}
 
 
-def _score_1d(a: Mapping, b: Mapping) -> Optional[float]:
-    pa, pb = a.get("path"), b.get("path")
-    if not pa or not pb or len(pa) != len(pb):
+def _score_seq(a: Mapping, b: Mapping, key: str) -> Optional[float]:
+    """같은 재료 하나의 상관 — 양쪽을 **각자** z-score 한 뒤 Pearson. 빈 자리는 공통 자리만."""
+    sa, sb = a["seq"].get(key), b["seq"].get(key)
+    if not sa or not sb or len(sa) != len(sb):
         return None
-    if "pflat" in a and "pflat" in b:
-        if a["pflat"] or b["pflat"]:
-            return 1.0 if (a["pflat"] and b["pflat"]) else 0.0
-        return _zcorr(a["zp"], b["zp"])
-    return _corr(pa, pb)
-
-
-def _score_2d(a: Mapping, b: Mapping) -> Optional[float]:
-    ga, gb = a.get("grid"), b.get("grid")
-    if not ga or not gb or len(ga) != len(gb):
-        return None
-    if "gflat" in a and "gflat" in b and len(ga) >= MIN_OVERLAP:
-        # 둘 다 빈 칸이 없다 — 공통 칸 = 전부라서 미리 한 정규화가 그대로 맞다.
-        if a["gflat"] or b["gflat"]:
-            return 1.0 if (a["gflat"] and b["gflat"]) else 0.0
-        return _zcorr(a["zg"], b["zg"])
-    both = [(p, q) for p, q in zip(ga, gb) if p is not None and q is not None]
-    if len(both) < MIN_OVERLAP:
+    pa, pb = a["pre"].get(key), b["pre"].get(key)
+    if pa is not None and pb is not None:
+        if pa[0] or pb[0]:
+            return 1.0 if (pa[0] and pb[0]) else 0.0
+        return _zcorr(pa[1], pb[1])
+    both = [(p, q) for p, q in zip(sa, sb) if p is not None and q is not None]
+    if len(both) < _SEQ_MIN[key]:
         return None
     return _corr([p for p, _ in both], [q for _, q in both])
 
@@ -234,45 +259,78 @@ def _scale(a: Mapping, b: Mapping) -> Optional[float]:
     return sb / sa
 
 
+def _mean(xs: Iterable[Optional[float]]) -> Optional[float]:
+    have = [x for x in xs if x is not None]
+    return sum(have) / len(have) if have else None
+
+
+def _channel_score(a: Mapping, b: Mapping) -> Optional[dict]:
+    """채널 하나 — 면 스캔끼리: 1D = X · Z 단면 상관의 평균, 2D = 칸 상관. 선 스캔끼리: 1D = 측정 순서 곡선.
+    면과 선은 모양의 종류가 달라 비교하지 않는다."""
+    if a["two_d"] != b["two_d"]:
+        return None
+    if a["two_d"]:
+        dx, dz = _score_seq(a, b, "x"), _score_seq(a, b, "z")
+        s1, s2 = _mean((dx, dz)), _score_seq(a, b, "grid")
+    else:
+        dx = dz = s2 = None
+        s1 = _score_seq(a, b, "path")
+    have = [(w, s) for w, s in ((W_1D, s1), (W_2D, s2)) if s is not None]
+    if not have:
+        return None
+    return {"score": sum(w * s for w, s in have) / sum(w for w, _ in have),
+            "d1": s1, "d2": s2, "dx": dx, "dz": dz, "scale": _scale(a, b)}
+
+
 def similarity(a: Mapping, b: Mapping) -> Optional[dict]:
     """두 스냅샷(또는 `prepare` 한 것)의 유사도. 같은 이름의 채널이 하나도 없거나 비교할 것이 없으면 None."""
-    ca, cb = a.get("channels") or {}, b.get("channels") or {}
+    ca, cb = prepare(a)["channels"], prepare(b)["channels"]
     by_channel = {}
     for key in ca.keys() & cb.keys():
-        s1, s2 = _score_1d(ca[key], cb[key]), _score_2d(ca[key], cb[key])
-        parts = [(W_1D, s1), (W_2D, s2)]
-        have = [(w, s) for w, s in parts if s is not None]
-        if not have:
-            continue
-        score = sum(w * s for w, s in have) / sum(w for w, _ in have)
-        by_channel[key] = {"score": score, "d1": s1, "d2": s2, "scale": _scale(ca[key], cb[key])}
+        s = _channel_score(ca[key], cb[key])
+        if s is not None:
+            by_channel[key] = s
     if not by_channel:
         return None
     vals = list(by_channel.values())
-
-    def mean_of(field: str) -> Optional[float]:
-        xs = [v[field] for v in vals if v[field] is not None]
-        return sum(xs) / len(xs) if xs else None
-
     scales = [v["scale"] for v in vals if v["scale"] and v["scale"] > 0]
     return {
-        "score": mean_of("score"),
-        "d1": mean_of("d1"),
-        "d2": mean_of("d2"),
+        "score": _mean(v["score"] for v in vals),
+        "d1": _mean(v["d1"] for v in vals),
+        "d2": _mean(v["d2"] for v in vals),
         # 채널마다의 크기 비를 기하평균으로 — ×2 와 ×0.5 가 서로 지운다.
         "scale": math.exp(sum(math.log(s) for s in scales) / len(scales)) if scales else None,
         "by_channel": dict(sorted(by_channel.items())),
     }
 
 
-def normalized_paths(features: Mapping, keys: Optional[Iterable[str]] = None) -> dict:
-    """겹쳐 그리기용 — 채널별 z-score 된 128점 (소수 셋째 자리). 평평하면 0 선."""
+def _znone(vals: list) -> list[Optional[float]]:
+    """빈 자리(None)는 두고 있는 값만 z-score — 그림용, 소수 셋째 자리. 평평하면 0 선."""
+    have = [v for v in vals if v is not None]
+    if not have:
+        return [None] * len(vals)
+    z = iter(zscore(have) if not _flat(have) else [0.0] * len(have))
+    return [None if v is None else round(next(z), 3) for v in vals]
+
+
+def normalized_profiles(features: Mapping, keys: Optional[Iterable[str]] = None, *,
+                        grid: bool = False) -> dict:
+    """겹쳐 그리기용 — 채널별로 비교에 쓰는 재료를 **각자** z-score 한 것.
+
+    면 스캔: `{"x": [16], "z": [16]}` (+ `grid=True` 면 `"grid": [256]`, 행 = Z · 열 = X). 선 스캔:
+    `{"line": [128]}`. 빈 자리는 None.
+    """
     out = {}
     chans = features.get("channels") or {}
     for key in (keys if keys is not None else chans.keys()):
-        path = (chans.get(key) or {}).get("path")
-        if path:
-            out[key] = [round(v, 3) for v in (zscore(path) if not _flat(path) else [0.0] * len(path))]
+        ch = chans.get(key) or {}
+        prof = profiles(ch.get("grid"))
+        if prof:
+            out[key] = {"x": _znone(prof["x"]), "z": _znone(prof["z"])}
+            if grid:
+                out[key]["grid"] = _znone(ch["grid"])
+        elif ch.get("path"):
+            out[key] = {"line": _znone(ch["path"])}
     return out
 
 
@@ -287,6 +345,7 @@ def rank(target: Mapping, candidates: Iterable[Mapping], tree: Tree, *, k: int =
     (2) 2위보다 `MARGIN` 이상 앞서고 (3) 단계 L-1 이 확실하며 1위가 그 자식일 때만 확실하다.
     """
     scored = []
+    target = prepare(target)
     for c in candidates:
         sim = similarity(target, c["features"])
         if sim is None or sim["score"] is None:
@@ -373,11 +432,17 @@ def similar_cases(scored: list[tuple[dict, Mapping]], tree: Tree) -> list[dict]:
 
 # ─── 묶음 (클러스터) ─────────────────────────────────────────────────────────
 
+def group_key(scan_enum: Any, sensor_id: Any) -> str:
+    """묶음 범위 하나의 이름 — (스캔 종류, 센서). 지도의 투영식도 이 키로 남는다 (SL-CLU-3 · SL-MAP-1)."""
+    return f"{scan_enum or ''}|{sensor_id if sensor_id is not None else ''}"
+
+
 def cluster(items: list[Mapping]) -> dict:
     """라벨과 무관하게 본 기록들을 모양으로 묶는다 (SL-CLU-2).
 
-    items 의 각 항목: `id` · `features` · `scan_enum`. 호출자가 스캔 종류마다 `CLUSTER_MAX_N` 개로
-    잘라서 넣는다. 스캔 종류마다 따로 묶는다 — 경로가 다르면 1D 비교가 무의미하다(SL-SIM-2).
+    items 의 각 항목: `id` · `features` · `scan_enum` · `sensor_id`(없으면 ''). 호출자가 범위마다
+    `CLUSTER_MAX_N` 개로 잘라서 넣는다. **(스캔 종류, 센서)** 마다 따로 묶는다 — 경로가 다르면 1D 비교가
+    무의미하고(SL-SIM-2), 센서가 다르면 신호의 기준이 달라 모양의 차이가 원인의 차이가 아니다(SL-CLU-3).
 
     방법(대표 기록 묶음): 모든 쌍을 비교해 `CLUSTER_MIN` 이상인 이웃을 센다. 남은 기록 중 이웃이
     가장 많은 것을 **대표**로 고르고, 그 대표와 `CLUSTER_MIN` 이상인 남은 기록을 한 묶음으로 뗀다.
@@ -385,14 +450,15 @@ def cluster(items: list[Mapping]) -> dict:
     **대표와 직접** 닮았으므로 한 묶음이 사슬처럼 늘어나 서로 다른 모양을 잇지 않는다.
     결과는 결정적이다(동점은 이웃 점수 합, 그다음 id).
     """
-    groups: dict[str, list[Mapping]] = {}
+    groups: dict[tuple[str, str], list[Mapping]] = {}
     for it in items:
-        groups.setdefault(str(it.get("scan_enum") or ""), []).append(it)
+        sensor = it.get("sensor_id")
+        groups.setdefault((str(it.get("scan_enum") or ""), "" if sensor is None else str(sensor)), []).append(it)
 
     clusters: list[dict] = []
     unclustered: list = []
-    for scan_enum in sorted(groups):
-        group = groups[scan_enum]
+    for scan_enum, sensor_id in sorted(groups):
+        group = groups[(scan_enum, sensor_id)]
         ids = [g["id"] for g in group]
         prep = [prepare(g["features"]) for g in group]
         n = len(group)
@@ -416,11 +482,12 @@ def cluster(items: list[Mapping]) -> dict:
             members = [{"id": ids[rep], "score": 1.0, "representative": True}]
             members += sorted(({"id": ids[j], "score": nb[rep][j], "representative": False} for j in near),
                               key=lambda m: (-m["score"], _order_key(m["id"])))
-            clusters.append({"scan_enum": scan_enum, "representative": ids[rep], "members": members})
+            clusters.append({"scan_enum": scan_enum, "sensor_id": sensor_id, "representative": ids[rep],
+                             "members": members})
             left -= near | {rep}
         unclustered += [ids[i] for i in sorted(left)]
 
-    clusters.sort(key=lambda c: (-len(c["members"]), c["scan_enum"], _order_key(c["representative"])))
+    clusters.sort(key=lambda c: (-len(c["members"]), c["scan_enum"], c["sensor_id"], _order_key(c["representative"])))
     return {"clusters": clusters, "unclustered": unclustered}
 
 
@@ -461,7 +528,7 @@ def _top2(b: list[list[float]]) -> list[tuple[float, list[float]]]:
 
 
 def cluster_map(items: list[Mapping]) -> dict:
-    """한 스캔 종류의 기록들을 2D 에 놓는다 — 가까울수록 닮았다 (SL-MAP-1).
+    """묶음 범위(스캔 종류 · 센서) 하나의 기록들을 2D 에 놓는다 — 가까울수록 닮았다 (SL-MAP-1).
 
     방법(landmark MDS): 서로 가장 먼 기록을 차례로 `MAP_LANDMARKS` 개 고르고(maxmin), 그 기준점끼리의
     거리로 고전 MDS 를 풀어 2D 자리를 정한 뒤, 나머지 기록은 **기준점까지의 거리만으로** 같은 공간에

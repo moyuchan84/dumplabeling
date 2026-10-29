@@ -72,14 +72,14 @@ def test_clusters_group_unlabelled_records_and_read_the_labelled_members(client,
     assert first["size"] == 4 and first["labelled"] == 2 and first["unlabelled"] == 2
     assert first["category"]["path"] == "신호 이상 › 피크 › 단일 피크"
     assert first["category"]["case_id"] == 1 and first["category"]["share"] == 1.0
-    assert len(first["path"]) == 128 and first["channel"] == "A"
+    assert len(first["profile"]["x"]) == len(first["profile"]["z"]) == 16 and first["channel"] == "A"
     assert second["size"] == 3 and second["category"] is None    # 아무도 라벨하지 않았다
 
     # 묶음 상세 — 대표 먼저, 구성원마다 라벨과 겹쳐 그릴 경로
     detail = client.get(f"/clusters/{second['cluster_no']}", params={"run_id": res["run"]["id"]}).json()
     assert detail["members"][0]["representative"] is True
     assert {m["name"] for m in detail["members"]} == set(edges)
-    assert all(len(m["path"]) == 128 for m in detail["members"])
+    assert all(m["profile"].keys() == {"x", "z"} for m in detail["members"])
 
     # 이 기록이 든 묶음은 유사 응답에도 실린다
     sim = client.post("/labels/similar", json={"server_id": 2, "name": edges[0], "source": f"{edges[0]}::a"}).json()
@@ -218,6 +218,32 @@ def test_the_map_places_every_record_and_the_one_on_screen(client, dsn, fleet):
     # 점을 누르면 나오는 상세 — 라벨 · 묶음 · 지금 기록과의 유사도와 두 곡선
     d = client.get(f"/records/{t['record_id']}",
                    params={"vs_server_id": 1, "vs_name": "late.tdf", "vs_source": "late::a"}).json()
-    assert d["cluster_no"] == peak_no and d["name"] == peaks[1] and set(d["paths"]) == {"A", "B"}
-    assert d["vs"]["similarity"]["score"] > 0.9 and len(d["vs"]["paths"]["A"]) == 128
+    assert d["cluster_no"] == peak_no and d["name"] == peaks[1] and set(d["profiles"]) == {"A", "B"}
+    assert d["vs"]["similarity"]["score"] > 0.9 and len(d["vs"]["profiles"]["A"]["grid"]) == 256
     assert client.get("/records/999999").status_code == 404
+
+
+def test_clusters_and_the_map_are_per_scan_kind_and_sensor(client, dsn, fleet):
+    # 같은 스캔 종류 · 같은 모양이어도 센서가 다르면 다른 묶음 · 다른 지도 (SL-CLU-3 · SL-MAP-1)
+    s2 = put_files(fleet, 1, "a", synth.peak(), 3)                       # 센서 2 (synth 기본)
+    s5 = []
+    for i in range(3):
+        name = f"b{i}.tdf"
+        sc = synth.scan(synth.peak(), gain=1.0 + i, offset=float(i), source=f"{name}::a")
+        fleet.put(1, name, [sc, synth.meta(sc["source"], sensor_id=5)])
+        s5.append(name)
+    for n in s2 + s5:
+        open_file(client, 1, n)
+    res = rerun(client)
+    assert sorted((c["sensor_id"], c["size"]) for c in res["clusters"]) == [("2", 3), ("5", 3)]
+
+    m = client.get("/clusters/map", params={"server_id": 1, "name": s5[0], "source": f"{s5[0]}::a"}).json()
+    assert (m["scan_enum"], m["sensor_id"]) == ("FINEHORVERT_SCAN", "5")
+    assert (m["target_kind"], m["target_sensor"]) == ("FINEHORVERT_SCAN", "5") and m["has_map"]
+    assert len(m["points"]) == 3 and m["target"]["in_run"] is True
+    assert sorted((k["sensor_id"], k["n"]) for k in m["kinds"]) == [("2", 3), ("5", 3)]
+    other = client.get("/clusters/map", params={"scan_enum": "FINEHORVERT_SCAN", "sensor_id": "2"}).json()
+    assert other["sensor_id"] == "2" and len(other["points"]) == 3 and other["target"] is None
+
+    no = m["target"]["cluster_no"]
+    assert client.get(f"/clusters/{no}").json()["sensor_id"] == "5"

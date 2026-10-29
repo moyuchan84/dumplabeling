@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>scanlabel 묶음 로직</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+/* layout: 한 단 문서, 왼쪽에 절 번호 대신 '어디서 일어나나'(상류/화면) 꼬리표 — 블루프린트 앱의 호박·잉크 톤을 빌린다 */
+:root {
+  --bg: #f6f3ee;
+  --plane: #fffdf9;
+  --ink: #2a2622;
+  --ink-2: #5d554c;
+  --line: #ddd4c8;
+  --accent: #b5651d;
+  --accent-soft: #f3e3d1;
+  --ok: #3e7a4a;
+  --warn: #a2402c;
+  --code-bg: #efe9e0;
+  --f-body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1c1a17; --plane: #25221e; --ink: #ece6dc; --ink-2: #b4aa9c; --line: #3d3832;
+    --accent: #e09a55; --accent-soft: #3a2c1e; --ok: #8cc79a; --warn: #f0937c; --code-bg: #2e2a25;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1c1a17; --plane: #25221e; --ink: #ece6dc; --ink-2: #b4aa9c; --line: #3d3832;
+  --accent: #e09a55; --accent-soft: #3a2c1e; --ok: #8cc79a; --warn: #f0937c; --code-bg: #2e2a25;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.7; }
+.wrap { max-width: 860px; margin: 0 auto; padding-block: 40px 80px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 36px; }
+h1 { font-size: 28px; line-height: 1.3; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 20px; margin: 0; font-weight: 600; text-wrap: balance; }
+h3 { font-size: 15px; margin: 0; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+.eyebrow, .tag { font-family: var(--f-mono); font-size: 11px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); }
+.tag { display: inline-block; border: 1px solid var(--line); padding: 1px 7px; color: var(--ink-2); letter-spacing: .06em; text-transform: none; }
+.tag.up { color: var(--accent); border-color: var(--accent); }
+section { display: flex; flex-direction: column; gap: 14px; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.plane { background: var(--plane); border: 1px solid var(--line); box-shadow: 3px 3px 0 var(--line); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+code, .mono { font-family: var(--f-mono); font-size: 12.5px; background: var(--code-bg); padding: 1px 5px; border-radius: 2px; }
+ul, ol { margin: 0; padding-left: 1.3em; display: flex; flex-direction: column; gap: 6px; max-width: 70ch; }
+.lead { font-size: 16px; color: var(--ink-2); }
+.summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.summary .plane b { color: var(--accent); }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 560px; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+th { font-family: var(--f-mono); font-size: 11px; letter-spacing: .08em; color: var(--ink-2); font-weight: 600; }
+td:first-child { white-space: nowrap; }
+.num { font-variant-numeric: tabular-nums; font-family: var(--f-mono); font-size: 13px; }
+.steps { counter-reset: s; list-style: none; padding: 0; gap: 10px; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 30px 1fr; gap: 8px; }
+.steps li::before { content: counter(s); font-family: var(--f-mono); font-weight: 600; color: var(--accent); border: 1px solid var(--accent); width: 22px; height: 22px; display: grid; place-items: center; font-size: 12px; margin-top: 3px; }
+.why { border-left: 3px solid var(--warn); padding: 4px 0 4px 12px; }
+.why h3 { color: var(--warn); }
+.diff { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.before h3 { color: var(--ink-2); }
+.after h3 { color: var(--ok); }
+svg text { fill: var(--ink); font-family: var(--f-mono); font-size: 11px; }
+svg .faint { fill: var(--ink-2); }
+figure { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+figcaption { font-size: 13px; color: var(--ink-2); }
+pre.mermaid { background: var(--plane); border: 1px solid var(--line); padding: 12px; margin: 0; overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header style="display:flex;flex-direction:column;gap:10px">
+    <span class="eyebrow">scanlabel · poc_viewer 사례 패널 「묶음」 탭</span>
+    <h1>「다시 묶기」는 무엇을 어떻게 묶나</h1>
+    <p class="lead">다시 묶기를 누른 순간부터, 기록 목록에서 기록을 눌러 묶음 지도에 그 자리가 뜨기까지의 실제 코드 흐름입니다. 2026-10-28 변경(묶음 범위에 <code>sensor_id</code> 추가, 면 스캔을 X · Z 단면과 칸으로 따로 정규화) 반영본입니다.</p>
+  </header>
+
+  <section>
+    <div class="head"><h2>한눈에</h2></div>
+    <div class="summary">
+      <div class="plane"><h3>기간 조건은 없다</h3><p>scanlabel 이 <b>지금까지 본 기록 전부(기록 풀)</b>가 재료입니다. 날짜로 자르지 않고, 범위마다 <b>최근에 바뀐 800건</b>까지만 씁니다.</p></div>
+      <div class="plane"><h3>fleet 은 부르지 않는다</h3><p>다시 묶기는 풀에 저장된 <b>특징 스냅샷</b>만 읽습니다. FTP·fleet 호출이 없습니다.</p></div>
+      <div class="plane"><h3>범위 = 스캔 종류 × 센서</h3><p>이번 변경으로 <code>scan_enum</code> 이 같아도 <code>sensor_id</code> 가 다르면 <b>따로</b> 묶고 따로 지도를 그립니다.</p></div>
+      <div class="plane"><h3>묶음 = 대표와 0.8 이상</h3><p>구성원 모두가 <b>대표 기록과 직접</b> 0.8 이상 닮아야 하고, 3건 미만이면 묶음이 아닙니다.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="head"><h2>1. 다시 묶기를 누르면</h2><span class="tag">화면 → scanlabel → PostgreSQL</span></div>
+    <pre class="mermaid">
+sequenceDiagram
+  participant S as 묶음 탭 (ClusterBrowser)
+  participant A as scanlabel API
+  participant T as 뒤 스레드 (run_clusters)
+  participant D as PostgreSQL
+  S->>A: POST /clusters/run
+  A-->>S: 202 job: running (바로 돌아옴)
+  A->>T: 스레드 시작
+  T->>D: scan_records 읽기 (범위마다 최근 800건)
+  T->>T: 범위마다 모든 쌍 유사도 → 묶음 → 분류 → 지도
+  T->>D: cluster_runs / members / points 저장 (이전 결과 삭제)
+  loop 2초마다 (job 이 running 인 동안만)
+    S->>A: GET /clusters
+    A-->>S: job.state
+  end
+  S->>S: done → 목록·지도·상세 모두 다시 읽기
+    </pre>
+    <ol class="steps">
+      <li><div><b>버튼</b> — <code>ClusterBrowser.tsx</code> 의 <code>rerun()</code> 이 아래 영역을 「묶음 목록」으로 되돌리고 <code>POST /api/scanlabel/clusters/run</code> 을 보냅니다. 응답은 기다리지 않습니다(202). 18초 걸리는 첫 판에서 프록시가 끊긴 뒤로 뒤에서 돕니다.</div></li>
+      <li><div><b>재료 읽기</b> — <code>Store.pool()</code>: <code>scan_records</code> 에서 <code>set_name='dump'</code> 행을 <code>(scan_enum, sensor_id)</code> 로 나누고, 범위마다 <code>seq</code>(특징이 마지막으로 쓰인 순서) 내림차순 800건. 넘친 수는 <code>truncated</code> 로 남깁니다.</div></li>
+      <li><div><b>묶기</b> — <code>shape.cluster()</code>: 범위 하나 안에서만 모든 쌍을 비교합니다(800건이면 약 32만 쌍, ≈6초).</div></li>
+      <li><div><b>분류 · 지도</b> — 묶음마다 라벨된 구성원의 합의(<code>cluster_category</code>), 범위마다 2D 지도(<code>cluster_map</code>).</div></li>
+      <li><div><b>저장</b> — 최신 결과 하나만 남깁니다. 묶음 번호는 그 결과 안에서만 뜻이 있어서, 다시 묶으면 번호가 바뀝니다.</div></li>
+    </ol>
+  </section>
+
+  <section>
+    <div class="head"><h2>2. 풀에는 무엇이 들어 있나</h2><span class="tag up">언제 · 어떤 데이터</span></div>
+    <p>다시 묶기 자체는 데이터를 새로 가져오지 않습니다. 풀(<code>scan_records</code>)에 이미 들어온 기록만 묶습니다. 기록이 풀에 들어오는 길은 셋입니다.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>들어오는 때</th><th>무엇이</th><th>코드</th></tr></thead>
+      <tbody>
+        <tr><td>Dump 화면에서 파일을 열 때</td><td>그 파일의 raw 스캔 기록 전부(라벨 제안을 묻는 호출이 풀에 넣음)</td><td><code>POST /labels/similar</code></td></tr>
+        <tr><td>라벨을 저장할 때</td><td>그 기록 하나</td><td><code>PUT /labels</code></td></tr>
+        <tr><td><code>jobs index</code> 를 돌릴 때</td><td>fleet <code>/generations</code> 커서 이후의 파일 전부 — fleet 캐시에 남은 것만, 없으면 <code>skipped</code></td><td><code>usecases.index</code></td></tr>
+      </tbody>
+    </table></div>
+    <p>행 하나는 <code>(servername, set, 파일, source)</code> 기록 하나이고, <b>특징 스냅샷</b>과 메타 사본(<code>scan_enum · chuck_id · sensor_id · 시각</code>)을 가집니다. 같은 세대·같은 특징 판·같은 범위면 다시 열어도 행이 바뀌지 않습니다. 그래서 같은 파일을 다시 열어도 「새 기록 있음」이 뜨지 않습니다.</p>
+    <div class="plane">
+      <h3>특징 스냅샷 (채널마다)</h3>
+      <ul>
+        <li><b>측정 순서 곡선</b> — 스캔 순서 배열을 128점으로 줄인 것(구간 평균, 짧으면 선형 보간). 선 스캔만 비교에 씁니다</li>
+        <li><b>칸</b> — (x, z) 평면을 16×16 칸으로 나눈 칸 평균(빈 칸은 비움). 점들이 한 줄 위에 있으면 칸 없음(선 스캔)</li>
+        <li><code>n · min · max · mean · std</code> — 정규화 전 값 그대로</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="head"><h2>3. 두 기록이 얼마나 닮았나 (점수)</h2><span class="tag">shape.similarity</span></div>
+    <ol class="steps">
+      <li><div>채널마다 비교 재료를 고릅니다. <b>면 스캔</b>(칸이 있음 — 지금 풀의 기록 전부): <b>X 단면</b>(칸의 열 평균, 16점) · <b>Z 단면</b>(행 평균, 16점) · <b>칸</b>(16×16). <b>선 스캔</b>: 측정 순서 곡선(128점). 면과 선은 비교하지 않습니다.</div></li>
+      <li><div>재료마다 <b>따로</b> z-score 로 정규화합니다. 오프셋과 배율이 사라지므로 <b>크기가 아니라 모양</b>만 남고, 한 방향의 큰 기울기가 다른 방향의 모양을 묻지 않습니다.</div></li>
+      <li><div>1D = X 단면 상관과 Z 단면 상관의 평균(각각 공통 자리 8개 이상), 2D = 칸 상관(공통 칸 16개 이상). 선 스캔은 1D = 곡선 상관.</div></li>
+      <li><div>채널 점수 = 1D 0.5 + 2D 0.5(있는 쪽만). 기록 점수 = <b>두 기록에 다 있는 채널</b>의 평균. 공통 채널이 없으면 비교하지 않습니다.</div></li>
+      <li><div>평평한 채널은 상관을 내지 않습니다. 평평 대 평평 = 1, 평평 대 그 외 = 0.</div></li>
+    </ol>
+  </section>
+
+  <section>
+    <div class="head"><h2>4. 어떻게 묶나 — 대표 기록 묶음</h2><span class="tag">shape.cluster</span></div>
+    <figure>
+      <svg viewBox="0 0 640 170" width="100%" role="img" aria-label="대표 기록 묶음의 예: 이웃이 가장 많은 기록이 대표가 되고 그 이웃이 묶음이 된다">
+        <rect x="1" y="1" width="638" height="168" fill="none" stroke="var(--line)"/>
+        <!-- cluster 1 -->
+        <circle cx="120" cy="85" r="58" fill="var(--accent-soft)" stroke="var(--accent)" stroke-dasharray="4 3"/>
+        <circle cx="120" cy="85" r="9" fill="var(--accent)"/>
+        <text x="120" y="110" text-anchor="middle">대표</text>
+        <g fill="var(--ink-2)"><circle cx="85" cy="60" r="6"/><circle cx="160" cy="62" r="6"/><circle cx="92" cy="122" r="6"/><circle cx="152" cy="118" r="6"/></g>
+        <text x="120" y="22" text-anchor="middle">묶음 #1 · 5건</text>
+        <!-- cluster 2 -->
+        <circle cx="330" cy="85" r="44" fill="none" stroke="var(--accent)" stroke-dasharray="4 3"/>
+        <circle cx="330" cy="85" r="9" fill="var(--accent)"/>
+        <g fill="var(--ink-2)"><circle cx="305" cy="65" r="6"/><circle cx="356" cy="105" r="6"/></g>
+        <text x="330" y="22" text-anchor="middle">묶음 #2 · 3건</text>
+        <!-- leftover -->
+        <g fill="none" stroke="var(--ink-2)" stroke-dasharray="2 2"><circle cx="500" cy="60" r="6"/><circle cx="530" cy="70" r="6"/><circle cx="580" cy="120" r="6"/></g>
+        <text x="540" y="22" text-anchor="middle">묶이지 않음</text>
+        <text x="540" y="150" text-anchor="middle" class="faint">이웃 1건뿐 → 3건 미만</text>
+      </svg>
+      <figcaption>점선 원 = 대표와 0.8 이상인 범위. 구성원끼리는 0.8 미만일 수 있지만, 모두 대표와는 직접 닮았습니다.</figcaption>
+    </figure>
+    <ol class="steps">
+      <li><div>범위 안 모든 쌍의 점수를 내고, 0.8(<code>CLUSTER_MIN</code>) 이상인 짝을 <b>이웃</b>으로 적습니다.</div></li>
+      <li><div>남은 기록 중 이웃이 가장 많은 것을 <b>대표</b>로 고릅니다(동점이면 이웃 점수 합, 그다음 id).</div></li>
+      <li><div>대표 + 그 대표의 남은 이웃을 한 묶음으로 떼어 냅니다.</div></li>
+      <li><div>대표의 남은 이웃까지 3건(<code>CLUSTER_MIN_SIZE</code>) 미만이 될 때까지 반복합니다. 남은 것은 「묶이지 않음」입니다.</div></li>
+      <li><div>묶음 번호는 큰 묶음부터 1, 2, 3…</div></li>
+    </ol>
+    <p>사슬 묶기(A~B, B~C 이면 A·C 도 같이)는 쓰지 않습니다. 모양이 전혀 다른 A 와 C 가 B 를 거쳐 한 묶음이 되기 때문입니다.</p>
+    <div class="plane">
+      <h3>묶음의 분류(카테고리)</h3>
+      <p>라벨된 구성원의 라벨을 단계(대·중·소)별로 셉니다. 소분류 라벨은 그 중분류·대분류의 표이기도 합니다. 한 단계의 1위가 <b>라벨된 구성원의 60% 이상</b>이고, 2위보다 많고, 바로 위 단계 합의 노드의 자식이면 그 단계는 「합의」입니다. 합의된 가장 깊은 단계가 묶음의 분류이고, 라벨된 구성원이 없으면 분류도 없습니다.</p>
+    </div>
+    <div class="plane">
+      <h3>묶음 지도(2D)</h3>
+      <p>범위마다 서로 가장 먼 기록 24개를 기준점으로 골라(거리 = 1 − 점수) 고전 MDS 로 2D 에 놓고, 나머지는 <b>기준점까지의 거리만으로</b> 투영합니다. 근사라서 가까우면 대체로 닮았지만 거리가 정확하지는 않습니다. 투영식을 저장해 두므로 묶은 뒤에 본 기록도 다시 묶지 않고 지도에 놓을 수 있습니다.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="head"><h2>5. 기록을 누르면 지도에 어떻게 뜨나</h2><span class="tag">GET /clusters/map</span></div>
+    <p>Dump 화면에서 기록을 고르면 사례 패널이 그 기록을 <code>target = (server_id, file, source)</code> 로 묶음 탭에 넘깁니다. 지도는 이 순서로 정해집니다.</p>
+    <ol class="steps">
+      <li><div>scanlabel 이 그 기록을 풀에서 찾습니다. 풀에 없으면 fleet <b>캐시</b>에서 읽어 특징만 계산합니다.</div></li>
+      <li><div>지도 범위 = 사람이 콤보박스로 고른 범위, 없으면 <b>그 기록의 (스캔 종류, 센서)</b>, 기록도 없으면 가장 큰 범위.</div></li>
+      <li><div>보이는 범위가 기록의 범위와 같을 때만 「지금 기록」 표시를 그립니다.</div></li>
+    </ol>
+    <div class="scroll"><table>
+      <thead><tr><th>지도 아래 문장</th><th>조건</th><th>뜻</th></tr></thead>
+      <tbody>
+        <tr><td>지금 기록은 묶음 #n 에 있습니다</td><td>이번 결과에 들었고 묶음 구성원</td><td>정상</td></tr>
+        <tr><td>어느 묶음에도 들지 않았습니다</td><td>이번 결과에 들었지만 묶이지 않음</td><td>같은 범위에서 대표와 0.8 이상 닮은 기록이 2건 이상 모이지 않음</td></tr>
+        <tr><td>…투영해 놓았습니다(묶음 번호 없음)</td><td><code>in_run: false</code></td><td>다시 묶은 <b>뒤에</b> 풀에 들어온 기록, 또는 800건 상한에 걸린 기록. 다시 묶으면 들어갑니다</td></tr>
+        <tr><td>다른 범위(…)라 이 지도에 없습니다</td><td>보이는 범위 ≠ 기록의 범위</td><td>콤보박스에서 ◎ 표시 범위를 고르면 보입니다(이제 기록을 바꾸면 자동으로 돌아감)</td></tr>
+        <tr><td>…범위의 지도가 없습니다</td><td><code>has_map: false</code></td><td>범위에 기록이 3건 미만이거나, 0005 이전(스캔 종류 단위)에 묶은 결과</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <div class="head"><h2>6. 아래 영역이 누를 때마다 바뀌는 이유</h2><span class="tag up">라벨 있음 · 라벨된 구성원 없음</span></div>
+    <p>지도 아래 영역은 하나의 상태(<code>view</code>)로 셋 중 하나를 그립니다. 지도를 누를 때마다 이 상태가 바뀌므로 그래프와 문구가 함께 바뀝니다. 지도 자체는 다시 불러오지 않습니다.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>누른 것</th><th>아래에 그려지는 것</th><th>보이는 라벨 문구의 조건</th></tr></thead>
+      <tbody>
+        <tr><td>처음 · 「← 묶음 목록」 · 다시 묶기</td><td><b>묶음 목록</b> — 행마다 대표의 X · Z 단면 · 분류 · <code>n건 · 라벨 k</code></td><td>분류가 없으면 옅게 이유: 라벨된 구성원 없음 / 합의 없음</td></tr>
+        <tr><td>지도의 <b>점</b></td><td><b>기록 상세</b> — 그 기록의 라벨 · 묶음 · 지금 기록과의 점수 · 두 기록의 X · Z 단면(지금 기록 잉크, 누른 기록 강조색, 단면마다 따로 그림)과 칸 그림 두 장</td><td>그 기록에 라벨이 있으면 라벨 경로, 없으면 「라벨 없음」</td></tr>
+        <tr><td>지도의 <b>#번호</b> · 「그 묶음 보기」 · 목록의 행</td><td><b>묶음 하나</b> — 대표 + 구성원의 X · Z 단면 · 단계별 분류 · 라벨 붙이기 · 구성원 목록</td><td>라벨된 구성원이 0명이면 「라벨된 구성원이 없습니다」, 모두 라벨이 있으면 「구성원 모두 라벨이 있습니다」</td></tr>
+      </tbody>
+    </table></div>
+    <div class="plane">
+      <h3>지도의 점 모양</h3>
+      <ul>
+        <li><b>●</b> 채운 점 = 그 기록에 라벨이 있음 (<code>scan_labels</code> 에 행이 있음)</li>
+        <li><b>○</b> 빈 점 = 라벨 없음</li>
+        <li>옅은 점 = 묶이지 않은 기록 · 선 = 묶음 경계(볼록 껍질) · 강조색 고리와 십자 = 지금 기록</li>
+      </ul>
+      <p>라벨을 붙이거나 다시 묶으면 숫자와 ●/○ 가 바뀝니다. 라벨 여부는 다시 묶지 않아도 즉시 반영되고, 묶음 구성은 다시 묶어야 바뀝니다.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="head"><h2>7. 다시 묶어도 묶이지 않는 경우</h2></div>
+    <div class="why"><h3>기록이 아직 풀에 없었다</h3><p>그 파일을 연 적이 없고 <code>jobs index</code> 도 돌지 않았으면 재료에 없습니다. 파일을 연 뒤 「새 기록 있음」이 뜨면 다시 묶어야 들어갑니다.</p></div>
+    <div class="why"><h3>범위 안 기록이 너무 적다</h3><p>범위가 3건 미만이면 묶음도 지도도 없습니다. 센서까지 나눈 이번 변경으로 범위가 작아지므로 이 경우가 늘 수 있습니다.</p></div>
+    <div class="why"><h3>닮은 기록이 모자라다</h3><p>대표와 0.8 이상인 기록이 2건 이상 모여야 합니다. 공통 채널이 없거나 채널이 평평하면 점수가 없거나 0입니다.</p></div>
+    <div class="why"><h3>800건 상한</h3><p>범위마다 최근에 바뀐 800건만 묶습니다. 오래된 기록은 지도에 투영만 됩니다.</p></div>
+    <div class="why"><h3>작업 실패 · 상태 유실</h3><p>실패하면 탭에 빨간 문장과 이유가 나오고 목록은 이전 결과입니다. 작업 상태는 API 프로세스 메모리에만 있어서, 묶는 도중 scanlabel 이 재시작되면 결과 없이 상태가 사라지고, CLI <code>jobs cluster</code> 의 진행은 화면에 보이지 않습니다(결과만 보임).</p></div>
+  </section>
+
+  <section>
+    <div class="head"><h2>8. 이번에 바꾼 것</h2><span class="tag up">2026-10-28</span></div>
+    <div class="diff">
+      <div class="plane before"><h3>전</h3><ul><li>범위 = <code>scan_enum</code> 하나</li><li>같은 스캔 종류면 센서가 달라도 한 묶음</li><li>지도 범위 고르기 = 알약 띠. 범위가 많으면 패널 폭을 넘어 옆으로 밀림</li><li>손으로 고른 범위가 기록을 바꿔도 남음</li><li>면 스캔도 측정 순서로 편 128점 곡선 하나로 1D 비교 · 화면 곡선도 그것 — 행이 꺾이는 자리가 섞여 뭉개짐</li></ul></div>
+      <div class="plane after"><h3>후</h3><ul><li>범위 = <code>(scan_enum, sensor_id)</code></li><li>센서가 다르면 다른 묶음 · 다른 지도</li><li>범위 고르기 = 앱의 콤보박스(길면 검색, 폭이 패널 안), 지금 기록의 범위에 ◎</li><li>기록을 바꾸면 그 기록의 범위로 돌아감</li><li>행·묶음·기록 상세에 「FINEHORVERT · 센서 IS_3」 처럼 범위를 적음</li><li>면 스캔의 1D = X 단면 · Z 단면, 칸과 함께 <b>재료마다 따로</b> 정규화 · 화면도 단면마다 한 장씩, 기록 상세에 칸 그림</li></ul></div>
+    </div>
+    <div class="scroll"><table>
+      <thead><tr><th>곳</th><th>변경</th></tr></thead>
+      <tbody>
+        <tr><td>scanlabel <code>migrations/0005</code></td><td><code>scan_records · cluster_members · cluster_points</code> 에 <code>sensor_id</code> 열. 기존 풀 행은 <code>meta.sensor_id</code> 에서 채움</td></tr>
+        <tr><td><code>processing/shape.py</code></td><td><code>cluster()</code> 가 (스캔 종류, 센서)로 나눔 · <code>group_key()</code> · <code>profiles()</code> 와 재료별 정규화(<code>similarity</code>), <code>normalized_profiles()</code></td></tr>
+        <tr><td><code>data/repository.py</code> · <code>usecases.py</code></td><td>풀 읽기·800건 상한·지도 투영을 범위 단위로</td></tr>
+        <tr><td><code>application/api.py</code></td><td><code>/clusters/map?sensor_id=</code>, 응답에 <code>sensor_id · target_sensor</code>, <code>kinds</code> 에 센서 · 곡선 필드 <code>paths/path</code> → <code>profiles/profile</code>(<code>{x, z}</code>, 기록 상세는 <code>grid</code> 까지), 점수에 <code>dx · dz</code></td></tr>
+        <tr><td>poc_viewer <code>ClusterBrowser.tsx</code> · <code>core/labels.ts</code></td><td>콤보박스, 범위 이름, 기록이 바뀌면 범위 초기화 · X · Z 단면을 한 장씩 · 기록 상세의 칸 그림 (<code>LabelForm.tsx</code> 의 유사 기록도)</td></tr>
+      </tbody>
+    </table></div>
+    <div class="plane">
+      <h3>적용 순서</h3>
+      <ol>
+        <li><code>python -m scanlabel.data.migrate up</code> — 0005 적용 (적용 전에는 scanlabel 이 스키마 불일치로 뜨지 않습니다)</li>
+        <li>scanlabel 재시작</li>
+        <li>묶음 탭에서 「다시 묶기」 — 0005 이전 결과는 「지도가 없습니다」로 보입니다</li>
+      </ol>
+      <p>아직 그대로인 것: 「이 기록 라벨」 탭의 <b>라벨 제안·유사 사례</b> 비교 범위는 여전히 스캔 종류만 봅니다(<code>same_scan_only</code>). 같이 바꿀지는 따로 정해야 합니다.</p>
+    </div>
+  </section>
+</div>
+</body>
+</html>

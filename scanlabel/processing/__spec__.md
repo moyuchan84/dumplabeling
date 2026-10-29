@@ -14,14 +14,16 @@ needs a stored fact, the caller passes it in (`Tree`, `candidates`, `member_labe
 
 ### `shape.py` — shape features, similarity, ranking, clusters, map, evaluation
 - **Every threshold and weight is a module constant here and nowhere else** (`SL-SUG-4` · `SL-CLU-7`):
-  `FEATURE_VERSION` · `PATH_N` · `GRID_N` · `MIN_OVERLAP` · `FLAT_REL` · `W_1D`/`W_2D` · `SUGGEST_MIN` · `MARGIN`
+  `FEATURE_VERSION` · `PATH_N` · `GRID_N` · `MIN_OVERLAP` · `PROFILE_MIN` · `FLAT_REL` · `W_1D`/`W_2D` · `SUGGEST_MIN` · `MARGIN`
   · `EVIDENCE_MIN` · `LEVEL_TOP` · `CASE_TOP` · `CLUSTER_MIN` · `CLUSTER_MIN_SIZE` · `CLUSTER_MAX_N` ·
   `CLUSTER_AGREE` · `MAP_LANDMARKS`. A change to one is a behaviour change: run `jobs eval` on the real labels
   and put the numbers in the commit message.
 - Features: `num` (poc_viewer's `num()` rule) · `channel_features` · `record_features` (the snapshot, before
   normalisation). Changing the snapshot's shape bumps `FEATURE_VERSION`.
-- Comparison: `zscore` · `prepare` (z-scores once for many comparisons — scores exactly like the raw snapshot) ·
-  `similarity` (score + scale ratio, `None` when no common channel) · `normalized_paths` (what the screen draws).
+- Comparison: `zscore` · `profiles` (X/Z profiles from the cells) · `prepare` (picks each channel's materials —
+  area scan: X profile, Z profile, cells; line scan: the scan-order curve — and z-scores each once, on its own;
+  scores exactly like the raw snapshot) · `similarity` (score + scale ratio, `None` when no common channel; an
+  area scan and a line scan are not compared) · `normalized_profiles` (what the screen draws, `SL-SIM-1`).
 - Reading scores: `rank` (per-level ranking with the tree roll-up, the "sure" levels) · `similar_cases` ·
   `cluster` (representative-seeded grouping) · `cluster_category` · `cluster_map` / `project` /
   `project_features` (landmark MDS, `SL-MAP-1`) · `evaluate` (leave-one-out).

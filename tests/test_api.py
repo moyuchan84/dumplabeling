@@ -167,7 +167,7 @@ def test_similar_ranks_by_shape_and_suggests_by_level(client, dsn, fleet):
     assert res["matches"][0]["source"] == "old1::a"
     assert res["matches"][0]["similarity"]["score"] > 0.95
     assert res["matches"][0]["similarity"]["scale"] is not None
-    assert set(res["matches"][0]["paths"]) == {"A", "B"} and len(res["target_paths"]["A"]) == 128
+    assert set(res["matches"][0]["profiles"]) == {"A", "B"} and len(res["target_profiles"]["A"]["x"]) == 16
     assert res["suggestion"]["path"] == "신호 이상 › 피크 › 단일 피크"
     assert res["suggestion"]["case_id"] == 1
     assert res["levels"]["1"][0]["suggested"] is True
