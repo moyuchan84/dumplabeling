@@ -249,6 +249,15 @@ class Store:
                              " WHERE set_name = %s", (set_name,)).fetchall()
         return {(r["servername"], r["name"], r["source"]): [int(i) for i in r["label_ids"]] for r in rows}
 
+    def labels_by_record_id(self, *, set_name: str) -> dict[int, list[int]]:
+        """풀의 기록 id → 붙은 라벨 id — 묶음 결과를 라벨로 잴 때(`shape.cluster_quality`)."""
+        with self._conn() as c:
+            rows = c.execute("SELECT r.id, l.label_ids FROM scan_records r JOIN scan_labels l"
+                             " ON l.servername = r.servername AND l.set_name = r.set_name"
+                             " AND l.name = r.name AND l.source = r.source WHERE r.set_name = %s",
+                             (set_name,)).fetchall()
+        return {int(r["id"]): [int(i) for i in r["label_ids"]] for r in rows}
+
     # ─── 기록 풀 (SL-POOL) ──────────────────────────────────────────────────
 
     def upsert_records(self, rows: Iterable[dict]) -> int:
@@ -340,21 +349,25 @@ class Store:
 
     def save_cluster_run(self, *, set_name: str, result: dict, n_records: int, truncated: int,
                          pool_seq: int, threshold: float, min_size: int, feature_version: int,
-                         maps: Optional[dict] = None, points: Optional[list[tuple]] = None) -> int:
-        """묶음 결과 한 벌을 저장한다. 그 set 의 이전 결과는 지운다 — 최신 것 하나만 있다.
+                         method: str = "skew", maps: Optional[dict] = None,
+                         points: Optional[list[tuple]] = None) -> int:
+        """묶음 결과 한 벌을 저장한다. 그 set · 잣대(`method`)의 이전 결과는 지운다 — 최신 것 하나만 있다.
 
         `maps` = 묶음 범위 키(`shape.group_key`) → 투영식, `points` = (record_id, scan_enum, chuck_id, sensor_id, x, y)
         — 묶음 지도(SL-MAP).
         """
         with self._conn() as c, c.transaction():
-            c.execute("DELETE FROM cluster_runs WHERE set_name = %s", (set_name,))
+            c.execute("DELETE FROM cluster_runs WHERE set_name = %s AND method = %s", (set_name, method))
             run_id = int(c.execute(
-                "INSERT INTO cluster_runs (set_name, threshold, min_size, feature_version, n_records,"
-                " n_clusters, n_unclustered, truncated, pool_seq, maps, created_at)"
+                "INSERT INTO cluster_runs (set_name, method, threshold, min_size, feature_version, n_records,"
+                " n_clusters, n_unclustered, truncated, pool_seq, created_at)"
                 " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-                (set_name, threshold, min_size, feature_version, n_records, len(result["clusters"]),
-                 len(result["unclustered"]), truncated, pool_seq, Jsonb(maps or {}),
-                 timebase.now_iso())).fetchone()["id"])
+                (set_name, method, threshold, min_size, feature_version, n_records, len(result["clusters"]),
+                 len(result["unclustered"]), truncated, pool_seq, timebase.now_iso())).fetchone()["id"])
+            if maps:
+                with c.cursor() as cur:
+                    cur.executemany("INSERT INTO cluster_maps (run_id, group_key, proj) VALUES (%s,%s,%s)",
+                                    [(run_id, k, Jsonb(v)) for k, v in maps.items()])
             if points:
                 with c.cursor() as cur:
                     cur.executemany(
@@ -369,10 +382,17 @@ class Store:
                      for no, cl in enumerate(result["clusters"], start=1) for m in cl["members"]])
         return run_id
 
-    def latest_run(self, set_name: str) -> Optional[dict]:
+    def latest_run(self, set_name: str, method: str = "skew") -> Optional[dict]:
         with self._conn() as c:
-            return c.execute("SELECT * FROM cluster_runs WHERE set_name = %s ORDER BY id DESC LIMIT 1",
-                             (set_name,)).fetchone()
+            return c.execute("SELECT * FROM cluster_runs WHERE set_name = %s AND method = %s"
+                             " ORDER BY id DESC LIMIT 1", (set_name, method)).fetchone()
+
+    def run_map(self, run_id: int, group_key: str) -> Optional[dict]:
+        """묶음 범위 하나의 지도 투영식 — 없으면 None (기록이 너무 적었던 범위)."""
+        with self._conn() as c:
+            row = c.execute("SELECT proj FROM cluster_maps WHERE run_id = %s AND group_key = %s",
+                            (run_id, group_key)).fetchone()
+        return row["proj"] if row else None
 
     def run_members(self, run_id: int, *, cluster_no: Optional[int] = None,
                     with_features: bool = False) -> list[dict]:
@@ -441,15 +461,16 @@ class Store:
                             " AND name = %s AND source = %s", (set_name, servername, name, source)).fetchone()
         return [int(i) for i in row["label_ids"]] if row else []
 
-    def record_cluster(self, *, set_name: str, servername: str, name: str, source: str) -> Optional[dict]:
-        """이 기록이 최신 묶음 결과의 어느 묶음에 들었나 — 없으면 None."""
+    def record_cluster(self, *, set_name: str, servername: str, name: str, source: str,
+                       method: str = "skew") -> Optional[dict]:
+        """이 기록이 그 잣대의 최신 묶음 결과에서 어느 묶음에 들었나 — 없으면 None."""
         with self._conn() as c:
             return c.execute(
                 "SELECT m.run_id, m.cluster_no FROM cluster_members m"
                 " JOIN scan_records r ON r.id = m.record_id"
                 " JOIN cluster_runs k ON k.id = m.run_id"
-                " WHERE k.set_name = %s AND r.servername = %s AND r.name = %s AND r.source = %s"
-                " ORDER BY m.run_id DESC LIMIT 1", (set_name, servername, name, source)).fetchone()
+                " WHERE k.set_name = %s AND k.method = %s AND r.servername = %s AND r.name = %s AND r.source = %s"
+                " ORDER BY m.run_id DESC LIMIT 1", (set_name, method, servername, name, source)).fetchone()
 
     def set_features(self, label_id: int, features: dict, feature_version: int) -> None:
         with self._conn() as c:

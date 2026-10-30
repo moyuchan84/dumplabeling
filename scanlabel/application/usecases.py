@@ -157,24 +157,44 @@ def index(store: Store, fleet: Fleet, *, set_name: str, page: int = 500,
     return {"files": files, "records": records, "skipped": skipped, "cursor": after}
 
 
-def run_clusters(store: Store, *, set_name: str) -> dict:
-    """풀 전체를 다시 묶어 저장한다 (SL-CLU-1). 반환 = 저장된 결과의 요약."""
+def run_clusters(store: Store, *, set_name: str, methods: Iterable[str] = shape.METHODS) -> dict:
+    """풀 전체를 잣대마다 다시 묶어 저장한다 (SL-CLU-1 · SL-CLU-10). 반환 = 잣대별 요약 + 라벨로 잰 숫자.
+
+    풀은 한 번만 읽는다 — 두 잣대가 같은 기록을 묶는다. 주성분 투영식은 범위마다 한 번 내서 묶음과
+    지도가 함께 쓴다. `quality` 는 라벨된 기록으로 잰 순도 · 덮음(`shape.cluster_quality`), `agreement` 는
+    두 잣대가 얼마나 같게 갈랐나(adjusted Rand) — 실데이터로 두 잣대를 견줄 때 본다.
+    """
+    methods = list(methods)
+    for m in methods:
+        shape.check_method(m)
     rows, total, truncated, seq = store.pool(set_name=set_name, per_scan_limit=shape.CLUSTER_MAX_N)
-    result = shape.cluster(rows)
-    # 묶음 지도 — 묶음 범위(스캔 종류, 척, 센서)마다 따로 (SL-MAP-1). rows 는 id 순이라 결과가 결정적이다.
-    maps: dict[str, dict] = {}
-    points: list[tuple] = []
     kinds: dict[tuple[str, str, str], list[dict]] = {}
     for r in rows:
         kinds.setdefault(shape.group_of(r), []).append(r)
-    for group_id, group in kinds.items():
-        m = shape.cluster_map(group)
-        if m["proj"] is not None:
-            maps[shape.group_key(*group_id)] = m["proj"]
-        points += [(rid, *group_id, x, y) for rid, (x, y) in m["points"].items()]
-    run_id = store.save_cluster_run(
-        set_name=set_name, result=result, n_records=len(rows), truncated=truncated, pool_seq=seq,
-        threshold=shape.CLUSTER_MIN, min_size=shape.CLUSTER_MIN_SIZE,
-        feature_version=shape.FEATURE_VERSION, maps=maps, points=points)
-    return {"run_id": run_id, "records": len(rows), "pool": total, "truncated": truncated,
-            "clusters": len(result["clusters"]), "unclustered": len(result["unclustered"])}
+    tree = store.tree()
+    labels = store.labels_by_record_id(set_name=set_name)
+    out: dict = {"records": len(rows), "pool": total, "truncated": truncated, "methods": {}}
+    results: dict[str, dict] = {}
+    for method in methods:
+        models = ({g: shape.pca_model(r["features"] for r in group) for g, group in kinds.items()}
+                  if method == "pca" else None)
+        result = shape.cluster(rows, method, models=models)
+        # 묶음 지도 — 묶음 범위(스캔 종류, 척, 센서)마다 따로 (SL-MAP-1). rows 는 id 순이라 결과가 결정적이다.
+        maps: dict[str, dict] = {}
+        points: list[tuple] = []
+        for group_id, group in kinds.items():
+            m = shape.cluster_map(group, method, model=models.get(group_id) if models else None)
+            if m["proj"] is not None:
+                maps[shape.group_key(*group_id)] = m["proj"]
+            points += [(rid, *group_id, x, y) for rid, (x, y) in m["points"].items()]
+        run_id = store.save_cluster_run(
+            set_name=set_name, result=result, n_records=len(rows), truncated=truncated, pool_seq=seq,
+            threshold=shape.CLUSTER_MIN, min_size=shape.CLUSTER_MIN_SIZE,
+            feature_version=shape.FEATURE_VERSION, method=method, maps=maps, points=points)
+        results[method] = result
+        out["methods"][method] = {"run_id": run_id, "clusters": len(result["clusters"]),
+                                  "unclustered": len(result["unclustered"]),
+                                  "quality": shape.cluster_quality(result, labels, tree)}
+    if "skew" in results and "pca" in results:
+        out["agreement"] = shape.partition_agreement(results["skew"], results["pca"])
+    return out
