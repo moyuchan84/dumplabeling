@@ -191,8 +191,24 @@ def test_similar_cases_are_grouped_by_case_and_ignore_unlike_records():
 
 # ─── 묶음 ──────────────────────────────────────────────────────────────────
 
-def item(i, fn, scan_enum="S", sensor_id="", **kw):
-    return {"id": i, "features": feats(fn, **kw), "scan_enum": scan_enum, "sensor_id": sensor_id}
+def item(i, fn, scan_enum="S", sensor_id="", chuck_id="", **kw):
+    return {"id": i, "features": feats(fn, **kw), "scan_enum": scan_enum, "chuck_id": chuck_id,
+            "sensor_id": sensor_id}
+
+
+def skewed(dev, *, cols=30, rows=20, gain=1.0):
+    """채널 셋(tr · txh · tyh)이 같은 바탕(기울기)을 따르고, txh 만 `dev(x, z)` 만큼 어긋난 면 스캔."""
+    xs, zs, tr, txh, tyh = [], [], [], [], []
+    for r in range(rows):
+        for c in range(cols):
+            x, z = c / (cols - 1), r / (rows - 1)
+            base = x + 0.5 * z
+            xs.append(x * 10.0)
+            zs.append(z * 4.0)
+            tr.append(gain * base)
+            txh.append(3.0 * gain * (base + dev(x, z)) + 100.0)       # 단위 · offset 이 달라도
+            tyh.append(-0.2 * gain * base)                            # 부호가 반대여도 — 정규화 후 같은 바탕
+    return shape.record_features({"value": {"tr": tr, "txh": txh, "tyh": tyh}, "xyz": {"x": xs, "z": zs}})
 
 
 def test_clusters_group_like_shapes_and_leave_the_rest_unclustered():
@@ -226,7 +242,82 @@ def test_clusters_never_mix_sensors_of_one_scan_kind():
     assert [(c["scan_enum"], c["sensor_id"]) for c in out["clusters"]] == [("S", "1")]
     assert sorted(m["id"] for m in out["clusters"][0]["members"]) == [1, 2, 3]
     assert sorted(out["unclustered"]) == [4, 5]                  # 센서 2 는 2건뿐 — 섞이지 않는다
-    assert shape.group_key("S", "1") != shape.group_key("S", "2") != shape.group_key("S", "")
+    assert shape.group_key("S", "", "1") != shape.group_key("S", "", "2") != shape.group_key("S", "", "")
+
+
+def test_clusters_never_mix_chucks_of_one_scan_kind_and_sensor():
+    # 같은 스캔 종류 · 센서 · 모양이어도 척이 다르면 다른 범위다 (SL-CLU-3)
+    items = ([item(i, synth.peak(), chuck_id="CH1", sensor_id="1", gain=1.0 + i) for i in range(1, 4)]
+             + [item(i, synth.peak(), chuck_id="CH2", sensor_id="1", gain=1.0 + i) for i in range(4, 6)])
+    out = shape.cluster(items)
+    assert [(c["scan_enum"], c["chuck_id"], c["sensor_id"]) for c in out["clusters"]] == [("S", "CH1", "1")]
+    assert sorted(out["unclustered"]) == [4, 5]
+    assert shape.group_key("S", "CH1", "1") != shape.group_key("S", "CH2", "1")
+    assert shape.group_of({"scan_enum": "S", "chuck_id": None, "sensor_id": 2}) == ("S", "", "2")
+
+
+# ─── 채널 간 편차 (SL-CLU-9) ────────────────────────────────────────────────
+
+RIGHT = lambda x, z: 0.4 if x > 0.75 else 0.0                    # txh 가 오른쪽 끝에서 들뜬다
+LEFT = lambda x, z: 0.4 if x < 0.25 else 0.0                     # txh 가 왼쪽 끝에서 들뜬다
+NONE = lambda x, z: 0.0
+
+
+def scope():
+    """한 묶음 범위 — 평소 기록 다섯 + 오른쪽 어긋남 셋 + 왼쪽 어긋남 셋. tyh 는 늘 반대로 움직인다."""
+    return ([("n", skewed(NONE, gain=1.0 + i)) for i in range(5)]
+            + [("r", skewed(RIGHT, gain=1.0 + i, cols=30 + 10 * i)) for i in range(3)]
+            + [("l", skewed(LEFT, gain=1.0 + i)) for i in range(3)])
+
+
+def test_skew_compares_where_channels_part_not_the_shared_shape():
+    recs = scope()
+    base = shape.skew_baseline(f for _, f in recs)
+    p = {k + str(i): shape.prepare_skew(f, base) for i, (k, f) in enumerate(recs)}
+    assert shape.skew_similarity(p["r5"], p["r6"])["score"] > 0.9
+    assert shape.skew_similarity(p["n0"], p["n1"])["score"] > 0.9     # 평소끼리 — 어긋남이 없다
+    assert shape.skew_similarity(p["r5"], p["l8"])["score"] < 0.3     # 바탕은 같아도 어긋나는 자리가 다르다
+    assert shape.skew_similarity(p["r5"], p["n0"])["score"] < shape.CLUSTER_MIN - 0.1   # 좁은 어긋남은 바닥에 묽어진다
+    assert shape.similarity(recs[5][1], recs[8][1])["score"] > 0.8    # 모양 유사도로는 가르지 못한다
+    assert shape.skew_similarity(p["r5"], p["l8"])["channels"] == ["tr", "txh", "tyh"]
+
+
+def test_the_baseline_takes_away_the_usual_offset_between_channels():
+    # tyh 가 늘 반대로 움직이면 그 고정된 편차가 모든 기록에 실린다 — 기준선이 없으면 어긋남이 묻힌다
+    recs = scope()
+    assert shape.skew_similarity(recs[5][1], recs[8][1])["score"] > 0.8
+    base = shape.skew_baseline(f for _, f in recs)
+    assert base["keys"] == ["tr", "txh", "tyh"] and len(base["mats"]["x"]) == 3 * shape.GRID_N
+    prof = shape.skew_profiles(recs[5][1], base)
+    assert max(prof["txh"]["x"]) > 0.2 and abs(prof["txh"]["x"][0]) < 0.05   # 오른쪽 끝만 들떠 있다
+    assert shape.skew_baseline(f for _, f in recs[:2]) is None                 # 너무 적으면 기준선이 없다
+
+
+def test_skew_needs_two_common_channels_and_uses_only_the_common_ones():
+    one = feats(synth.peak(), channels=("A",))
+    assert shape.skew_similarity(one, one) is None
+    assert shape.skew_profiles(one) == {}
+    a = skewed(RIGHT)
+    drop = {"version": a["version"], "channels": {k: v for k, v in a["channels"].items() if k != "tyh"}}
+    assert shape.skew_similarity(a, drop)["channels"] == ["tr", "txh"]
+    prof = shape.skew_profiles(a)
+    assert prof.keys() == {"tr", "txh", "tyh"} and len(prof["txh"]["x"]) == shape.GRID_N
+    assert abs(sum(prof[k]["x"][-1] for k in prof)) < 0.01     # 자리마다 채널 편차의 합은 0 — 채널 평균에서 잰다
+
+
+def test_prepared_skew_scores_exactly_like_raw_snapshots():
+    a, b = skewed(lambda x, z: 0.3 * x), skewed(lambda x, z: 0.2 * x * x, gain=2.0)
+    raw = shape.skew_similarity(a, b)
+    assert shape.skew_similarity(shape.prepare_skew(a), shape.prepare_skew(b)) == raw
+
+
+def test_clusters_group_by_where_channels_part():
+    items = [{"id": i, "features": f, "scan_enum": "S"} for i, (_, f) in enumerate(scope(), start=1)]
+    out = shape.cluster(items)
+    assert sorted(sorted(m["id"] for m in c["members"]) for c in out["clusters"]) == \
+        [[1, 2, 3, 4, 5], [6, 7, 8], [9, 10, 11]]
+    m = shape.cluster_map(items)
+    assert m["proj"]["baseline"]["keys"] == ["tr", "txh", "tyh"]
 
 
 def test_cluster_category_is_the_deepest_level_the_labelled_members_agree_on():

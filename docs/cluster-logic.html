@@ -79,7 +79,7 @@ pre.mermaid { background: var(--plane); border: 1px solid var(--line); padding: 
   <header style="display:flex;flex-direction:column;gap:10px">
     <span class="eyebrow">scanlabel · poc_viewer 사례 패널 「묶음」 탭</span>
     <h1>「다시 묶기」는 무엇을 어떻게 묶나</h1>
-    <p class="lead">다시 묶기를 누른 순간부터, 기록 목록에서 기록을 눌러 묶음 지도에 그 자리가 뜨기까지의 실제 코드 흐름입니다. 2026-10-28 변경(묶음 범위에 <code>sensor_id</code> 추가, 면 스캔을 X · Z 단면과 칸으로 따로 정규화) 반영본입니다.</p>
+    <p class="lead">다시 묶기를 누른 순간부터, 기록 목록에서 기록을 눌러 묶음 지도에 그 자리가 뜨기까지의 실제 코드 흐름입니다. 2026-10-28 변경(묶음 범위에 <code>sensor_id</code> 추가, 면 스캔을 X · Z 단면과 칸으로 따로 정규화) 반영본이며, 2026-10-30 변경(범위에 <code>chuck_id</code> 추가 · 잣대를 <b>채널 간 편차</b>로)은 바로 아래 상자에 적었습니다.</p>
   </header>
 
   <section>
@@ -87,7 +87,8 @@ pre.mermaid { background: var(--plane); border: 1px solid var(--line); padding: 
     <div class="summary">
       <div class="plane"><h3>기간 조건은 없다</h3><p>scanlabel 이 <b>지금까지 본 기록 전부(기록 풀)</b>가 재료입니다. 날짜로 자르지 않고, 범위마다 <b>최근에 바뀐 800건</b>까지만 씁니다.</p></div>
       <div class="plane"><h3>fleet 은 부르지 않는다</h3><p>다시 묶기는 풀에 저장된 <b>특징 스냅샷</b>만 읽습니다. FTP·fleet 호출이 없습니다.</p></div>
-      <div class="plane"><h3>범위 = 스캔 종류 × 센서</h3><p>이번 변경으로 <code>scan_enum</code> 이 같아도 <code>sensor_id</code> 가 다르면 <b>따로</b> 묶고 따로 지도를 그립니다.</p></div>
+      <div class="plane"><h3>범위 = 스캔 종류 × 척 × 센서</h3><p><code>scan_enum</code> 이 같아도 <code>chuck_id</code> 나 <code>sensor_id</code> 가 다르면 <b>따로</b> 묶고 따로 지도를 그립니다(2026-10-30 에 척 추가, SL-CLU-3).</p></div>
+      <div class="plane"><h3>잣대 = 채널 간 편차 (2026-10-30)</h3><p>묶음 · 지도의 점수는 한 채널의 모양이 아니라 <b>같은 자리에서 채널(tr · txh · tyh …)끼리 어긋난 정도</b>입니다. 채널마다 제 평균 · 표준편차로 잰 값에서 채널 평균을 빼고, 그 범위가 평소 어긋나는 만큼(자리마다 중앙값)을 다시 뺀 뒤, 남은 어긋남의 자리 · 방향 · 크기를 비교합니다(SL-CLU-9). 아래 흐름에서 「유사도」는 이 점수로 읽습니다. 라벨 제안은 그대로 모양 유사도입니다.</p></div>
       <div class="plane"><h3>묶음 = 대표와 0.8 이상</h3><p>구성원 모두가 <b>대표 기록과 직접</b> 0.8 이상 닮아야 하고, 3건 미만이면 묶음이 아닙니다.</p></div>
     </div>
   </section>
@@ -114,7 +115,7 @@ sequenceDiagram
     </pre>
     <ol class="steps">
       <li><div><b>버튼</b> — <code>ClusterBrowser.tsx</code> 의 <code>rerun()</code> 이 아래 영역을 「묶음 목록」으로 되돌리고 <code>POST /api/scanlabel/clusters/run</code> 을 보냅니다. 응답은 기다리지 않습니다(202). 18초 걸리는 첫 판에서 프록시가 끊긴 뒤로 뒤에서 돕니다.</div></li>
-      <li><div><b>재료 읽기</b> — <code>Store.pool()</code>: <code>scan_records</code> 에서 <code>set_name='dump'</code> 행을 <code>(scan_enum, sensor_id)</code> 로 나누고, 범위마다 <code>seq</code>(특징이 마지막으로 쓰인 순서) 내림차순 800건. 넘친 수는 <code>truncated</code> 로 남깁니다.</div></li>
+      <li><div><b>재료 읽기</b> — <code>Store.pool()</code>: <code>scan_records</code> 에서 <code>set_name='dump'</code> 행을 <code>(scan_enum, chuck_id, sensor_id)</code> 로 나누고, 범위마다 <code>seq</code>(특징이 마지막으로 쓰인 순서) 내림차순 800건. 넘친 수는 <code>truncated</code> 로 남깁니다.</div></li>
       <li><div><b>묶기</b> — <code>shape.cluster()</code>: 범위 하나 안에서만 모든 쌍을 비교합니다(800건이면 약 32만 쌍, ≈6초).</div></li>
       <li><div><b>분류 · 지도</b> — 묶음마다 라벨된 구성원의 합의(<code>cluster_category</code>), 범위마다 2D 지도(<code>cluster_map</code>).</div></li>
       <li><div><b>저장</b> — 최신 결과 하나만 남깁니다. 묶음 번호는 그 결과 안에서만 뜻이 있어서, 다시 묶으면 번호가 바뀝니다.</div></li>
@@ -200,7 +201,7 @@ sequenceDiagram
     <p>Dump 화면에서 기록을 고르면 사례 패널이 그 기록을 <code>target = (server_id, file, source)</code> 로 묶음 탭에 넘깁니다. 지도는 이 순서로 정해집니다.</p>
     <ol class="steps">
       <li><div>scanlabel 이 그 기록을 풀에서 찾습니다. 풀에 없으면 fleet <b>캐시</b>에서 읽어 특징만 계산합니다.</div></li>
-      <li><div>지도 범위 = 사람이 콤보박스로 고른 범위, 없으면 <b>그 기록의 (스캔 종류, 센서)</b>, 기록도 없으면 가장 큰 범위.</div></li>
+      <li><div>지도 범위 = 사람이 콤보박스로 고른 범위, 없으면 <b>그 기록의 (스캔 종류, 척, 센서)</b>, 기록도 없으면 가장 큰 범위.</div></li>
       <li><div>보이는 범위가 기록의 범위와 같을 때만 「지금 기록」 표시를 그립니다.</div></li>
     </ol>
     <div class="scroll"><table>

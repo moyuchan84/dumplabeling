@@ -242,8 +242,44 @@ def test_clusters_and_the_map_are_per_scan_kind_and_sensor(client, dsn, fleet):
     assert (m["target_kind"], m["target_sensor"]) == ("FINEHORVERT_SCAN", "5") and m["has_map"]
     assert len(m["points"]) == 3 and m["target"]["in_run"] is True
     assert sorted((k["sensor_id"], k["n"]) for k in m["kinds"]) == [("2", 3), ("5", 3)]
-    other = client.get("/clusters/map", params={"scan_enum": "FINEHORVERT_SCAN", "sensor_id": "2"}).json()
+    other = client.get("/clusters/map", params={"scan_enum": "FINEHORVERT_SCAN", "chuck_id": "CH1",
+                                                "sensor_id": "2"}).json()
     assert other["sensor_id"] == "2" and len(other["points"]) == 3 and other["target"] is None
 
     no = m["target"]["cluster_no"]
     assert client.get(f"/clusters/{no}").json()["sensor_id"] == "5"
+
+
+def test_clusters_and_the_map_are_per_scan_kind_chuck_and_sensor(client, dsn, fleet):
+    # 같은 스캔 종류 · 센서 · 모양이어도 척이 다르면 다른 묶음 · 다른 지도 (SL-CLU-3 · SL-MAP-1)
+    c1 = put_files(fleet, 1, "k", synth.peak(), 3)                       # 척 CH1 (synth 기본)
+    c2 = []
+    for i in range(3):
+        name = f"m{i}.tdf"
+        sc = synth.scan(synth.peak(), gain=1.0 + i, offset=float(i), source=f"{name}::a")
+        fleet.put(1, name, [sc, synth.meta(sc["source"], chuck_id="CH2")])
+        c2.append(name)
+    for n in c1 + c2:
+        open_file(client, 1, n)
+    res = rerun(client)
+    assert sorted((c["chuck_id"], c["size"]) for c in res["clusters"]) == [("CH1", 3), ("CH2", 3)]
+
+    m = client.get("/clusters/map", params={"server_id": 1, "name": c2[0], "source": f"{c2[0]}::a"}).json()
+    assert (m["scan_enum"], m["chuck_id"], m["sensor_id"]) == ("FINEHORVERT_SCAN", "CH2", "2")
+    assert (m["target_kind"], m["target_chuck"], m["target_sensor"]) == ("FINEHORVERT_SCAN", "CH2", "2")
+    assert m["has_map"] and len(m["points"]) == 3 and m["target"]["in_run"] is True
+    assert sorted((k["chuck_id"], k["n"]) for k in m["kinds"]) == [("CH1", 3), ("CH2", 3)]
+    other = client.get("/clusters/map", params={"scan_enum": "FINEHORVERT_SCAN", "chuck_id": "CH1",
+                                                "sensor_id": "2"}).json()
+    assert other["chuck_id"] == "CH1" and len(other["points"]) == 3 and other["target"] is None
+
+    no = m["target"]["cluster_no"]
+    detail = client.get(f"/clusters/{no}").json()
+    assert detail["chuck_id"] == "CH2" and set(detail["skew"]) == {"A", "B"}
+    # 기록 상세 — 그림 재료는 기록마다 제 것만으로: 상대를 바꿔도 지금 기록의 곡선은 같다
+    rid = m["target"]["record_id"]
+    pts = [p["id"] for p in m["points"] if p["id"] != rid]
+    vs = {"vs_server_id": 1, "vs_name": c2[0], "vs_source": f"{c2[0]}::a"}
+    d1, d2 = (client.get(f"/records/{p}", params=vs).json() for p in pts)
+    assert d1["vs"]["profiles"] == d2["vs"]["profiles"] and d1["vs"]["skew"] == d2["vs"]["skew"]
+    assert d1["vs"]["skew_similarity"]["channels"] == ["A", "B"] and d1["chuck_id"] == "CH2"

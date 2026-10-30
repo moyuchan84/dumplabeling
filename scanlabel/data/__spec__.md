@@ -28,7 +28,8 @@ across databases (`SL-CASE-3`).
 - `ValueError` → 422, `KeyError` → 404 at the API; the tree rules come from `processing/tree.py`, the `CHECK`
   constraints are the second line.
 - Times people read are KST ISO text (`timebase.py`); a pool row is rewritten only when its generation, feature
-  version, scan kind or sensor changes, and that rewrite takes a new `seq` (`SL-POOL-3`).
+  version, scan kind, chuck or sensor changes, and that rewrite takes a new `seq` (`SL-POOL-3`). `chuck_id` ·
+  `sensor_id` are columns of the pool, the members and the map points (migrations `0005` · `0006`) — the cluster group.
 
 ### `migrate.py` + `migrations/` — numbered forward-only SQL
 - Order · ledger · checksum · advisory lock, and nothing else. A file is one transaction. **An applied file is

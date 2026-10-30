@@ -86,6 +86,14 @@ def _sim_out(sim: dict) -> dict:
     }
 
 
+def _skew_out(sim: Optional[dict]) -> Optional[dict]:
+    """채널 간 편차 점수 — 묶음 · 지도가 쓰는 잣대 (SL-CLU-9)."""
+    if sim is None:
+        return None
+    return {"score": _r(sim["score"]), "d1": _r(sim["d1"]), "d2": _r(sim["d2"]),
+            "dx": _r(sim["dx"]), "dz": _r(sim["dz"]), "channels": sim["channels"]}
+
+
 def _level_out(entries: list[dict]) -> list[dict]:
     return [{**e, "score": _r(e["score"])} for e in entries]
 
@@ -98,7 +106,7 @@ def _labels_out(tree, ids) -> list[dict]:
 def _record_ref(r: dict) -> dict:
     return {"record_id": r["record_id"], "servername": r["servername"], "server_id": r["server_id"],
             "name": r["name"], "source": r["source"], "sig": r["sig"], "scan_enum": r["scan_enum"],
-            "sensor_id": r.get("sensor_id") or "", "meta": r["meta"]}
+            "chuck_id": r.get("chuck_id") or "", "sensor_id": r.get("sensor_id") or "", "meta": r["meta"]}
 
 
 def _show_channel(features: Optional[dict]) -> Optional[str]:
@@ -304,8 +312,14 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
             [labels.get((m["servername"], m["name"], m["source"]), []) for m in members], tree)
         return {"run_id": int(hit["run_id"]), "cluster_no": int(hit["cluster_no"]),
                 "size": len(members), "scan_enum": members[0]["scan_enum"] if members else "",
+                "chuck_id": members[0]["chuck_id"] if members else "",
                 "sensor_id": members[0]["sensor_id"] if members else "",
                 **_category_out(cat)}
+
+    def baseline_of(run: Optional[dict], row: dict) -> Optional[dict]:
+        """그 기록의 묶음 범위에서 최신 결과가 뺀 「평소 어긋남」 — 화면도 묶음이 본 그대로 그린다 (SL-CLU-9)."""
+        proj = ((run or {}).get("maps") or {}).get(shape.group_key(*shape.group_of(row)))
+        return (proj or {}).get("baseline")
 
     def run_out(set_name: str) -> Optional[dict]:
         run = store.latest_run(set_name)
@@ -318,16 +332,19 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
                 "stale": store.pool_changed_since(set_name=set_name, seq=int(run["pool_seq"]))}
 
     def clusters_view(set_name: str, scan_enum: Optional[str]) -> dict:
+        # 일의 상태를 결과보다 먼저 읽는다 — 거꾸로면 그 사이에 끝난 일이 「done」인데 결과는 없는 응답이 된다.
+        job = jobs_state.get(set_name)
         run = run_out(set_name)
         pool_total = store.pool_count(set_name)
         if run is None:
-            return {"run": None, "pool": pool_total, "clusters": [], "job": jobs_state.get(set_name)}
+            return {"run": None, "pool": pool_total, "clusters": [], "job": job}
         tree = store.tree()
         labels = store.labels_by_record(set_name=set_name)
         groups: dict[int, list[dict]] = {}
         for m in store.run_members(run["id"]):
             groups.setdefault(int(m["cluster_no"]), []).append(m)
         rep_feats = store.features_of([g[0]["record_id"] for g in groups.values()])
+        full_run = store.latest_run(set_name)
         out = []
         for no, members in sorted(groups.items()):
             rep = members[0]
@@ -337,13 +354,14 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
                 [labels.get((m["servername"], m["name"], m["source"]), []) for m in members], tree)
             feats = rep_feats.get(rep["record_id"])
             ch = _show_channel(feats)
-            out.append({"cluster_no": no, "scan_enum": rep["scan_enum"], "sensor_id": rep["sensor_id"],
-                        "size": len(members),
+            out.append({"cluster_no": no, "scan_enum": rep["scan_enum"], "chuck_id": rep["chuck_id"],
+                        "sensor_id": rep["sensor_id"], "size": len(members),
                         "min_score": _r(min(m["score"] for m in members)),
                         "representative": _record_ref(rep), "channel": ch,
                         "profile": shape.normalized_profiles(feats, [ch]).get(ch) if ch else None,
+                        "skew": shape.skew_profiles(feats or {}, baseline_of(full_run, rep)),
                         **_category_out(cat)})
-        return {"run": run, "pool": pool_total, "clusters": out, "job": jobs_state.get(set_name)}
+        return {"run": run, "pool": pool_total, "clusters": out, "job": job}
 
     # 다시 묶기는 수십 초 걸릴 수 있다 — 요청 하나에 매달면 앞단 프록시가 먼저 끊는다(socket hang up).
     # 그래서 뒤에서 돌리고 바로 202 를 돌려준다. 상태는 이 프로세스의 메모리에만 있다(SL-CLU-8).
@@ -397,7 +415,8 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
         ch = _show_channel(members[0]["features"])
         return {
             "run_id": int(run["id"]), "cluster_no": cluster_no, "scan_enum": members[0]["scan_enum"],
-            "sensor_id": members[0]["sensor_id"], "size": len(members), "channel": ch,
+            "chuck_id": members[0]["chuck_id"], "sensor_id": members[0]["sensor_id"], "size": len(members),
+            "channel": ch, "skew": shape.skew_profiles(members[0]["features"], baseline_of(run, members[0])),
             **_category_out(shape.cluster_category(member_labels, tree)),
             "members": [{**_record_ref(m), "score": _r(m["score"]), "representative": m["representative"],
                          "labels": _labels_out(tree, ids),
@@ -415,31 +434,32 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
             return row["features"], row
         f = files.get(server_id, set_name, name)
         [rec] = pool_rows(f, [f.find(source)])
-        return rec["features"], {"scan_enum": rec["scan_enum"], "sensor_id": rec["sensor_id"], "record_id": None}
+        return rec["features"], {"scan_enum": rec["scan_enum"], "chuck_id": rec["chuck_id"],
+                                 "sensor_id": rec["sensor_id"], "record_id": None}
 
     @app.get("/clusters/map")
-    def cluster_map(set_name: str = "dump", scan_enum: Optional[str] = None, sensor_id: Optional[str] = None,
-                    server_id: Optional[int] = None, name: Optional[str] = None,
+    def cluster_map(set_name: str = "dump", scan_enum: Optional[str] = None, chuck_id: Optional[str] = None,
+                    sensor_id: Optional[str] = None, server_id: Optional[int] = None, name: Optional[str] = None,
                     source: Optional[str] = None):
-        """최신 묶음 결과의 2D 지도 한 장(묶음 범위 = 스캔 종류 · 센서 하나) + 지금 기록의 자리."""
+        """최신 묶음 결과의 2D 지도 한 장(묶음 범위 = 스캔 종류 · 척 · 센서 하나) + 지금 기록의 자리."""
         run = store.latest_run(set_name)
         if run is None:
             raise KeyError("아직 묶은 적이 없다 — 「다시 묶기」를 먼저")
         run_id = int(run["id"])
         kinds = store.map_kinds(run_id)
         target = None
-        target_group: Optional[tuple[str, str]] = None
+        target_group: Optional[tuple[str, str, str]] = None
         feats = None
         trow = None
         if server_id is not None and name and source:
             feats, trow = target_features(set_name, server_id, name, source)
-            target_group = (str(trow["scan_enum"] or ""), str(trow.get("sensor_id") or ""))
+            target_group = shape.group_of(trow)
         if scan_enum is not None:
-            group = (scan_enum, sensor_id or "")
+            group = (scan_enum, chuck_id or "", sensor_id or "")
         elif target_group is not None:
             group = target_group
         else:
-            group = (kinds[0]["scan_enum"], kinds[0]["sensor_id"]) if kinds else ("", "")
+            group = shape.group_of(kinds[0]) if kinds else ("", "", "")
         key = shape.group_key(*group)
         maps = run["maps"] or {}
         tree = store.tree()
@@ -471,32 +491,41 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
                 [labels.get((m["servername"], m["name"], m["source"]), []) for m in ps], tree)["category"]
             cl_out.append({"cluster_no": no, "size": len(ps),
                            "category": None if cat is None else cat["path"]})
-        return {"run_id": run_id, "scan_enum": group[0], "sensor_id": group[1],
-                "kinds": [{"scan_enum": k["scan_enum"], "sensor_id": k["sensor_id"], "n": k["n"]} for k in kinds],
+        return {"run_id": run_id, "scan_enum": group[0], "chuck_id": group[1], "sensor_id": group[2],
+                "kinds": [{"scan_enum": k["scan_enum"], "chuck_id": k["chuck_id"], "sensor_id": k["sensor_id"],
+                           "n": k["n"]} for k in kinds],
                 "points": points, "clusters": cl_out, "target": target,
                 "target_kind": None if target_group is None else target_group[0],
-                "target_sensor": None if target_group is None else target_group[1],
+                "target_chuck": None if target_group is None else target_group[1],
+                "target_sensor": None if target_group is None else target_group[2],
                 "has_map": key in maps}
 
     @app.get("/records/{record_id}")
     def record_detail(record_id: int, set_name: str = "dump", vs_server_id: Optional[int] = None,
                       vs_name: Optional[str] = None, vs_source: Optional[str] = None):
-        """풀의 기록 하나 — 지도에서 누른 점의 상세. `vs_*` 를 주면 그 기록과의 유사도와 두 기록의 단면 · 칸."""
+        """풀의 기록 하나 — 지도에서 누른 점의 상세. `vs_*` 를 주면 그 기록과의 유사도(모양 · 채널 간 편차)와
+        두 기록의 단면 · 칸 · 편차. 그림 재료(`profiles` · `skew`)는 기록마다 **제 것만으로** 정규화한다 — 상대가
+        바뀌어도 그 기록의 그림은 같다."""
         r = store.get_record(record_id)
         tree = store.tree()
         ids = store.label_of(set_name=r["set_name"], servername=r["servername"], name=r["name"],
                              source=r["source"])
         run = store.latest_run(r["set_name"])
         point = store.record_point(int(run["id"]), record_id) if run else None
+        base = baseline_of(run, r)
         out = {**_record_ref(r), "seen_at": r["seen_at"], "labels": _labels_out(tree, ids),
                "cluster_no": point["cluster_no"] if point else None,
                "run_id": int(run["id"]) if run else None,
-               "profiles": shape.normalized_profiles(r["features"], grid=True), "vs": None}
+               "profiles": shape.normalized_profiles(r["features"], grid=True),
+               "skew": shape.skew_profiles(r["features"], base), "vs": None}
         if vs_server_id is not None and vs_name and vs_source:
             feats, _ = target_features(r["set_name"], vs_server_id, vs_name, vs_source)
             sim = shape.similarity(feats, r["features"])
             out["vs"] = {"similarity": None if sim is None else _sim_out(sim),
-                         "profiles": shape.normalized_profiles(feats, grid=True)}
+                         "skew_similarity": _skew_out(shape.skew_similarity(
+                             shape.prepare_skew(feats, base), shape.prepare_skew(r["features"], base))),
+                         "profiles": shape.normalized_profiles(feats, grid=True),
+                         "skew": shape.skew_profiles(feats, base)}
         return out
 
     app.get("/clusters/{cluster_no}")(get_cluster)
