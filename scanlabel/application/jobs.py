@@ -6,7 +6,8 @@
 - `refeature` — `FEATURE_VERSION` 이 다른 라벨의 특징을 fleet 캐시에서 다시 만든다. 그 세대가
   fleet 에 없으면 `stale` 로 보고하고 건너뛴다.
 - `index` — fleet 이 해석해 둔 파일을 기록 풀에 넣는다(`/generations` 커서, FTP 없음). 주기 실행용.
-- `cluster` — 기록 풀을 모양으로 다시 묶어 저장한다(화면의 「다시 묶기」와 같은 일).
+- `cluster` — 기록 풀을 두 잣대(채널 간 편차 · 주성분)로 다시 묶어 저장한다(화면의 「다시 묶기」와 같은 일).
+  `--method skew|pca` 로 하나만. 라벨된 기록으로 잰 순도 · 덮음과 두 잣대의 일치도(adjusted Rand)를 찍는다.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from typing import Optional
 
 from ..connectors.fleet import Fleet, FleetUnavailable
 from ..data.repository import Store
+from ..processing import shape
 from ..processing.tree import LEVEL_NAMES
 from .usecases import index, refeature, run_clusters, run_eval, seed_labels
 
@@ -52,8 +54,9 @@ def _main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--set-name", default="dump")
     p.add_argument("--fleet-url", default=os.environ.get("FLEET_API_URL", "http://localhost:8000"))
     p.add_argument("--max-files", type=int, default=None, help="이번 실행에서 읽을 파일 수 상한")
-    p = sub.add_parser("cluster", help="기록 풀을 모양으로 다시 묶기")
+    p = sub.add_parser("cluster", help="기록 풀을 다시 묶기 — 채널 간 편차 · 주성분 두 잣대 (라벨로 잰 순도 · 일치도)")
     p.add_argument("--set-name", default="dump")
+    p.add_argument("--method", choices=("all", "skew", "pca"), default="all", help="묶을 잣대 (기본: 둘 다)")
     args = ap.parse_args(argv)
 
     dsn = args.dsn or os.environ.get("SCANLABEL_DB_DSN", "")
@@ -68,7 +71,9 @@ def _main(argv: Optional[list[str]] = None) -> int:
             res = run_eval(store, set_name=args.set_name, same_scan_only=not args.all_scans)
             print(json.dumps(res, ensure_ascii=False, indent=2)) if args.json else _print_eval(res)
         elif args.cmd == "cluster":
-            print(json.dumps(run_clusters(store, set_name=args.set_name), ensure_ascii=False, indent=2))
+            methods = shape.METHODS if args.method == "all" else (args.method,)
+            print(json.dumps(run_clusters(store, set_name=args.set_name, methods=methods),
+                             ensure_ascii=False, indent=2))
         else:
             fleet = Fleet(args.fleet_url)
             try:

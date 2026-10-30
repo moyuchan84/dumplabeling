@@ -179,7 +179,7 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 ## Clusters (SL-CLU)
 
 - `SL-CLU-1` A cluster run groups the pool and is **stored** (`cluster_runs` + `cluster_members`, only the latest
-  run per set is kept), so the screen, the cluster numbers and a bulk label all refer to the same result. It runs on
+  run per set **and measure** (`SL-CLU-10`) is kept), so the screen, the cluster numbers and a bulk label all refer to the same result. It runs on
   request (`POST /clusters/run`, the screen's 「다시 묶기」) or from `jobs cluster`; nothing re-clusters behind a
   reader's back. A run remembers the pool's highest `seq`; a higher one in the pool makes it `stale`.
 - `SL-CLU-2` The method is **representative-seeded grouping**: all pairs within one group (`SL-CLU-3`) are compared
@@ -248,6 +248,29 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   purity 0.869; shape with the same groups 121 / 114 / 0.984; before this change (shape, (scan kind, sensor)) 82 / 74 /
   0.984. `jobs cluster` 39 s (shape 42 s). Revisit when real tr/txh/tyh records are labelled: compare the two
   measures' purity there, and tune `SKEW_FLOOR` / `CLUSTER_MIN` for skew.
+- `SL-CLU-10` **Two measures, both stored, the screen picks one**: `skew` (`SL-CLU-9`) and `pca` (principal
+  components). One re-run (`POST /clusters/run`, `jobs cluster`) reads the pool once and stores a run per measure
+  (`cluster_runs.method`, migration `0007`); every cluster / map / record route takes `method` (default `skew`, any
+  other value is a 422), and a bulk label names the measure of the run it saw. `jobs cluster --method skew|pca` runs one.
+  PCA, per group (`SL-CLU-3`), from the records with the group's most common (kind, channel set) — others get no
+  coordinates, never cluster and have no point: each record becomes one row of three **deviations from the group's
+  per-position median** — `shape` (each channel's own-std-scaled materials), `skew` (the per-slot inter-channel
+  deviation of `SL-CLU-9`) and `amp` (each channel's log std) — weighted `PCA_W` (0.4 · 0.4 · 0.2; area materials
+  `PCA_MAT_W` X 0.25 · Z 0.25 · cells 0.5, cells reduced to `PCA_GRID` 8×8, the line curve to `PCA_PATH` 64) and scaled
+  to RMS per value. Components are kept until `PCA_VAR` (0.90) of the variance is explained (at least two, at most
+  `PCA_MAX_K` 10), by subspace iteration + Rayleigh–Ritz in the standard library — deterministic, sign fixed by the
+  largest loading. Two records score `(2·u·v + f) / (|u|² + |v|² + f)` on their coordinates, `f = 2·PCA_FLOOR²`
+  (0.10) — the skew score's form; clustering is `SL-CLU-2` with that score. The map is the first two coordinates
+  as they are (a projection, not an approximation; the axes mean something), and the run stores the model so a record
+  outside the run lands by the same linear projection. `GET /clusters/map?method=pca` adds `axes` (each axis's share
+  of variance, its weight split by (part, channel), its loading curves), `GET /records/{id}?method=pca` adds `pca`
+  (the record's distance from the group's usual and where it lies) and `vs.pca_similarity`.
+  `jobs cluster` prints, per measure, the label purity per level and coverage (`shape.cluster_quality`) and the two
+  partitions' adjusted Rand index (`shape.partition_agreement`) — the numbers to compare the two on real data.
+  [test: "test_pca_groups_by_where_channels_part_and_places_records_on_the_axes" · "test_pca_scores_like_skew_and_needs_the_scopes_channel_set"]
+  Note: amplitude is one of the materials, so a group whose records differ mostly in gain splits by gain under `pca`
+  (it does not under `skew`). Not yet: the measures have not been compared on real tr/txh/tyh records — the API
+  default stays `skew` until they are.
 
 ## Cluster map (SL-MAP)
 
@@ -257,7 +280,9 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   `1 − skew score`, classical MDS on those, every other record projected from its distances to
   the landmarks only (24 comparisons each). It is an approximation and is said to be one.
   [test: "test_the_map_puts_like_shapes_together_and_unlike_ones_apart"]
-- `SL-MAP-2` The run stores the projection (`cluster_runs.maps`: landmark ids, pseudo-inverse, mean, skew baseline), so a record
+- `SL-MAP-2` The run stores the projection per group (`cluster_maps`, one row per group since `0007` — a PCA model is
+  thousands of numbers, so a read loads only its group's: landmark ids, pseudo-inverse, mean, skew baseline; for `pca`
+  the model and the skew baseline), so a record
   **outside the run** — seen after it, or cut by the cap — is placed on the same map without re-running: its features
   (from the pool, else fleet's cache) against the landmarks. Such a target says `in_run: false` and has no cluster.
   [test: "test_a_record_outside_the_run_lands_where_its_twin_is" · "test_the_map_places_every_record_and_the_one_on_screen"]

@@ -15,7 +15,7 @@ never `connectors` (a stored row does not know where it came from) and never `ap
 | `scan_labels` | one labelled record: label ids + feature snapshot + meta copy (`SL-LBL`) | `PUT /labels`, cluster apply | empty selection deletes the row |
 | `scan_records` | the record pool — every record seen, labelled or not (`SL-POOL`) | opening a file, labelling, `jobs index`, `jobs refeature` | not deleted |
 | `index_cursors` | where `jobs index` stopped in fleet's `/generations` | `jobs index` | not deleted |
-| `cluster_runs` · `cluster_members` · `cluster_points` | the latest cluster run per set, its members and 2D map positions (`SL-CLU` · `SL-MAP`) | `POST /clusters/run`, `jobs cluster` | replaced by the next run |
+| `cluster_runs` · `cluster_members` · `cluster_points` · `cluster_maps` | the latest cluster run per set and measure (`method`: `skew` · `pca`, `SL-CLU-10`), its members, 2D map positions and one map projection per group (`SL-CLU` · `SL-MAP`) | `POST /clusters/run`, `jobs cluster` | replaced by the next run of the same measure |
 | `schema_migrations` | the migration ledger | `migrate.py` | never |
 
 A case link (`label_defs.case_id`) is a **soft** reference to fleet's `acs_case` — scanlabel never joins
@@ -30,6 +30,8 @@ across databases (`SL-CASE-3`).
 - Times people read are KST ISO text (`timebase.py`); a pool row is rewritten only when its generation, feature
   version, scan kind, chuck or sensor changes, and that rewrite takes a new `seq` (`SL-POOL-3`). `chuck_id` ·
   `sensor_id` are columns of the pool, the members and the map points (migrations `0005` · `0006`) — the cluster group.
+- A run's map projections are rows of `cluster_maps` (`run_id`, `group_key`), not one jsonb on the run (migration
+  `0007` moved them): a PCA model is thousands of numbers per group, so `run_map` reads only the group asked for.
 
 ### `migrate.py` + `migrations/` — numbered forward-only SQL
 - Order · ledger · checksum · advisory lock, and nothing else. A file is one transaction. **An applied file is

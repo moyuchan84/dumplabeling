@@ -119,7 +119,7 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
 - **`cases` = 유사 사례.** 닮은 기록(점수 ≥ 0.6)들의 라벨이 가리키는 사례(fleet `acs_case.case_id`)를 사례 단위로
   모은 것 — `score` 는 그 사례로 온 기록의 최고 점수, `count` 는 그런 기록 수, 최대 5건. 사례의 제목 · 본문은
   fleet `/cases/{id}` 에서 읽습니다.
-- **`cluster` = 이 기록이 든 묶음**(최신 묶음 결과 기준, 없으면 `null`). 모양은 아래 `GET /clusters` 의 한 칸과 같습니다.
+- **`cluster` = 이 기록이 든 묶음**(채널 간 편차(`skew`) 잣대의 최신 묶음 결과 기준, 없으면 `null`). 모양은 아래 `GET /clusters` 의 한 칸과 같습니다.
 - 파일을 연 것으로 보고 그 기록을 **기록 풀**에 넣습니다(묶음의 재료).
 
 `source` 를 빼면 파일의 모든 기록에 대해 제안 하나씩:
@@ -155,10 +155,17 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
 분류(`category`)는 그 묶음의 **라벨된 구성원**이 합의한 가장 깊은 단계입니다(60% 이상 + 2위보다 많음 + 위 단계의
 자식) — 라벨된 구성원이 없거나 갈리면 `null`. 이 판단도 서버가 하고, 화면은 옮겨 적습니다.
 
-### `GET /clusters?set_name=dump&scan_enum=`
+**잣대는 둘입니다** — `method=skew`(기본, 위의 채널 간 편차) · `method=pca`(주성분). 「다시 묶기」 한 번이 두 잣대로 다
+묶어 따로 저장하고, 아래 묶음 · 지도 · 기록 라우트는 모두 `method` 를 받아 그 잣대의 최신 결과를 봅니다(다른 값은 422).
+주성분 = 범위 안에서 기록마다 「채널별 모양 · 채널 간 편차 · 채널별 크기(log 표준편차)가 범위의 평소(자리마다 중앙값)와
+다른 정도」를 한 줄로 늘어놓고 주성분으로 줄인 좌표입니다. 점수는 그 좌표로 채널 간 편차와 같은 꼴(1 = 자리 · 방향 · 크기가
+같음)이고, 범위에서 가장 흔한 채널 집합이 아닌 기록은 이 잣대로는 묶이지도 지도에 놓이지도 않습니다. 크기도 재료라 진폭만
+다른 기록들은 주성분에서 갈립니다.
+
+### `GET /clusters?set_name=dump&scan_enum=&method=skew`
 
 ```json
-{ "run": { "id": 4, "created_at": "2026-10-15T11:40:02+09:00", "records": 312, "clusters": 9,
+{ "run": { "id": 4, "method": "skew", "created_at": "2026-10-15T11:40:02+09:00", "records": 312, "clusters": 9,
            "unclustered": 41, "truncated": 0, "threshold": 0.8, "min_size": 3, "stale": false },
   "pool": 312,
   "clusters": [
@@ -181,36 +188,54 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
 
 ### `POST /clusters/run` · `{ "set_name": "dump" }`
 
+두 잣대(`skew` · `pca`)를 모두 묶어 각각 저장합니다.
+
 다시 묶기를 **시작**하고 끝나기를 기다리지 않습니다 → `202 { "job": { "state": "running", "started_at": "…",
 "finished_at": null, "error": null } }`. 이미 돌고 있으면 그 작업을 그대로 돌려줍니다(두 번 돌지 않음).
 진행은 `GET /clusters` 의 `job` 으로 봅니다 — `running` → `done` 이면 목록이 새 결과, `failed` 면 `error` 에 이유가
 있고 목록은 이전 결과입니다. 묶음 범위(스캔 종류 · 척 · 센서)마다 최근 800건까지 — 2,400건에 20초 안팎. 같은 일을
 `python -m scanlabel.application.jobs cluster` 로도 돌립니다(그 진행은 API 의 `job` 에 보이지 않고, 결과만 보입니다).
+`jobs cluster --method skew|pca` 는 하나만 묶고, 잣대마다 라벨된 기록으로 잰 단계별 순도 · 덮음과 두 잣대가 얼마나 같게
+갈랐는지(adjusted Rand, `agreement`)를 찍습니다.
 
 > 요청 하나에 기다리게 하던 첫 판은 18초에서 앞단 프록시가 연결을 끊었습니다(2026-10-15) — 그래서 뒤에서 돕니다.
 
-### `GET /clusters/map?set_name=dump&scan_enum=&chuck_id=&sensor_id=&server_id=&name=&source=` — 묶음 지도
+### `GET /clusters/map?set_name=dump&scan_enum=&chuck_id=&sensor_id=&server_id=&name=&source=&method=skew` — 묶음 지도
 
 묶음 범위(스캔 종류 · 척 · 센서) 하나의 기록들을 2D 에 놓은 것 — **채널 간 편차가 가까울수록 닮았습니다**(묶음과 같은 잣대,
 근사: 기준점 24개에 대한 거리로 놓는다). `server_id`·`name`·`source` 를 주면 그 기록(지금 화면의 기록)의 자리도 줍니다.
 `scan_enum`(+`chuck_id` · `sensor_id`, 빼면 없음 `""`)을 빼면 그 기록의 범위, 그것도 없으면 가장 많은 범위.
 
 ```json
-{ "run_id": 4, "scan_enum": "FINEHORVERT_SCAN", "chuck_id": "CH1", "sensor_id": "2", "has_map": true,
+{ "run_id": 4, "method": "skew", "scan_enum": "FINEHORVERT_SCAN", "chuck_id": "CH1", "sensor_id": "2", "has_map": true,
   "kinds": [ { "scan_enum": "FINEHORVERT_SCAN", "chuck_id": "CH1", "sensor_id": "2", "n": 800 },
              { "scan_enum": "FINEHORVERT_SCAN", "chuck_id": "CH2", "sensor_id": "2", "n": 412 } ],
   "points": [ { "id": 12, "x": -0.2573, "y": 0.1102, "c": 2, "l": true } ],
   "clusters": [ { "cluster_no": 2, "size": 534, "category": "ID-0603 › WS › IFM-MIOB" } ],
   "target": { "x": 0.5604, "y": 0.0, "cluster_no": null, "record_id": 1, "in_run": false },
-  "target_kind": "FINEHORVERT_SCAN", "target_chuck": "CH1", "target_sensor": "2" }
+  "target_kind": "FINEHORVERT_SCAN", "target_chuck": "CH1", "target_sensor": "2", "axes": null }
 ```
+
+`method=pca` 면 자리 = 첫째 · 둘째 주성분 좌표 그대로(근사가 아니라 투영)이고, `axes` 가 축마다 무엇을 보는지 줍니다:
+
+```json
+"axes": { "kept": 4, "explained": 0.91, "n": 800,
+          "axes": [ { "axis": 1, "explained": 0.52,
+                      "parts": [ { "part": "skew", "channel": "txh", "share": 0.61 }, … ],
+                      "loadings": { "shape": { "tr": { "x": [ … ], "z": [ … ] } }, "skew": { "txh": { … } } },
+                      "amp": { "tr": 0.12, "txh": -0.4, "tyh": 0.03 } }, { "axis": 2, … } ] }
+```
+
+- `parts` = 그 축의 무게를 (재료 `shape` · `skew` · `amp`, 채널)로 나눈 몫, 큰 것부터. `loadings` = 1D 재료(면: X · Z 단면,
+  선: `line`)의 무게 곡선 — 큰 자리일수록 그 축을 따라 기록이 갈린다. 칸은 몫에만 들어갑니다.
 
 - 점 = `id`(풀의 기록 id — `GET /records/{id}`) · 자리 · `c` 묶음 번호(묶이지 않음 = `null`) · `l` 라벨 있음.
 - `target.in_run: false` = 이번 묶음 뒤에 본 기록이거나 상한에 걸려 빠진 기록 — 같은 투영식으로 놓았고 묶음 번호는 없다.
   그 기록의 범위가 고른 지도와 다르면 `target: null`(`target_kind` · `target_chuck` · `target_sensor` 로 알 수 있다).
-- `has_map: false` = 0006 이전에 묶은 결과(지도가 척 없이 나뉘었다) — 다시 묶으면 생깁니다. 아직 묶은 적이 없으면 404.
+- `has_map: false` = 0006 이전에 묶은 결과(지도가 척 없이 나뉘었다)이거나 그 범위의 기록이 너무 적었다 — 다시 묶으면
+  생깁니다. 아직 묶은 적이 없으면 404.
 
-### `GET /records/{record_id}?set_name=dump&vs_server_id=&vs_name=&vs_source=` — 기록 상세
+### `GET /records/{record_id}?set_name=dump&vs_server_id=&vs_name=&vs_source=&method=skew` — 기록 상세
 
 지도에서 누른 점의 기록. `vs_*` 를 주면 그 기록(지금 화면의 기록)과의 유사도(모양 `similarity` · 채널 간 편차
 `skew_similarity` — 묶음 · 지도가 본 점수)와 그 기록의 단면 · 칸 · 편차가 `vs` 에 옵니다. 여기서만 `profiles` 에 16×16 칸
@@ -221,37 +246,42 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
 
 ```json
 { "record_id": 12, "servername": "…", "server_id": 1, "name": "…", "source": "…", "sig": "…", "scan_enum": "…",
-  "meta": { … }, "seen_at": "…", "labels": [ … ], "cluster_no": 2, "run_id": 4,
-  "chuck_id": "CH1", "sensor_id": "2",
+  "meta": { … }, "seen_at": "…", "labels": [ … ], "cluster_no": 2, "run_id": 4, "method": "skew",
+  "chuck_id": "CH1", "sensor_id": "2", "pca": null,
   "profiles": { "A": { "x": [ … 16개 ], "z": [ … 16개 ], "grid": [ … 256개 ] } },
   "skew": { "A": { "x": [ … 16개 ], "z": [ … 16개 ] }, "B": { … } },
   "vs": { "similarity": { "score": 0.88, "d1": 0.85, "d2": 0.9, "scale": 1.3, "by_channel": { … } },
           "skew_similarity": { "score": 0.83, "d1": 0.8, "d2": 0.86, "dx": 0.78, "dz": 0.82, "channels": [ "A", "B" ] },
+          "pca_similarity": null,
           "profiles": { "A": { "x": [ … ], "z": [ … ], "grid": [ … ] } },
           "skew": { "A": { "x": [ … ], "z": [ … ] }, "B": { … } } } }
 ```
 
+`method=pca` 면 `cluster_no` · `run_id` 가 주성분 결과의 것이고, `pca` = 이 기록이 범위의 평소와 얼마나(`distance`, 값 하나당
+RMS) · 어디서(`parts`, (재료, 채널)별 몫) 다른지, `vs.pca_similarity` = `{ "score": 0.86 }`(주성분 점수). 범위의 채널 집합과
+다른 기록이면 둘 다 `null`.
+
 없는 id 는 404.
 
-### `GET /clusters/{cluster_no}?set_name=dump&run_id=`
+### `GET /clusters/{cluster_no}?set_name=dump&run_id=&method=skew`
 
 묶음 하나의 구성원 — 대표 먼저, 그다음 대표와의 점수 순. 구성원마다 `labels`(붙은 라벨)와 겹쳐 그릴 `profile`
 (묶음의 `channel` 의 X · Z 단면).
 
 ```json
-{ "run_id": 4, "cluster_no": 2, "scan_enum": "…", "size": 17, "channel": "A",
+{ "run_id": 4, "method": "skew", "cluster_no": 2, "scan_enum": "…", "size": 17, "channel": "A",
   "labelled": 5, "unlabelled": 12, "levels": { … }, "category": { … },
   "members": [ { "record_id": 12, "servername": "…", "server_id": 1, "name": "…", "source": "…", "sig": "…",
                  "scan_enum": "…", "meta": { … }, "score": 1.0, "representative": true,
                  "labels": [ … ], "profile": { "x": [ … ], "z": [ … ] } } ] }
 ```
 
-`run_id` 가 최신 결과와 다르면 422(「그새 묶음이 다시 계산됐다」), 묶은 적이 없거나 없는 번호면 404.
+`run_id` 가 그 잣대의 최신 결과와 다르면 422(「그새 묶음이 다시 계산됐다」), 묶은 적이 없거나 없는 번호면 404.
 
 ### `POST /clusters/{cluster_no}/apply` — 묶음에 라벨 한 번에 붙이기
 
 ```json
-{ "set_name": "dump", "run_id": 4, "label_ids": [3], "record_ids": null, "only_unlabelled": true }
+{ "set_name": "dump", "method": "skew", "run_id": 4, "label_ids": [3], "record_ids": null, "only_unlabelled": true }
 ```
 
 → `{ "applied": 12, "skipped": 5 }`
@@ -259,7 +289,8 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
 - `record_ids` 를 주면 그 구성원만, 빼면 묶음 전체. `only_unlabelled: true`(기본)면 이미 라벨된 구성원은 건너뜁니다.
 - 라벨은 `PUT /labels` 와 같은 규칙으로 검증하고, 하나라도 어기면 **하나도 쓰지 않고** 422.
 - 풀에 저장된 특징을 그대로 씁니다 — fleet 을 부르지 않습니다.
-- `run_id` 가 최신 결과와 다르면 422 — 다른 사람이 다시 묶은 뒤의 번호로 엉뚱한 기록에 붙이지 않게.
+- `run_id` 가 `method` 잣대의 최신 결과와 다르면 422 — 다른 사람이 다시 묶은 뒤의 번호로 엉뚱한 기록에 붙이지 않게.
+  화면이 본 결과의 잣대를 그대로 보냅니다(기본 `skew`).
 
 ## `GET /health`
 

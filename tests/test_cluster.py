@@ -114,10 +114,10 @@ def test_a_cluster_label_is_applied_to_its_unlabelled_members_at_once(client, ds
     # 조상 + 자손을 함께 주면 하나도 쓰지 않고 422, 다시 묶인 뒤의 옛 run_id 도 422
     bad = client.post(f"/clusters/{no}/apply", json={"run_id": run_id, "label_ids": [ids["피크"], ids["단일 피크"]]})
     assert bad.status_code == 422
-    rerun(client)
+    new_id = rerun(client)["run"]["id"]
     old = client.post(f"/clusters/{no}/apply", json={"run_id": run_id, "label_ids": [ids["가장자리 저하"]]})
     assert old.status_code == 422 and "다시" in old.json()["detail"]
-    assert client.get("/clusters/99", params={"run_id": run_id + 1}).status_code == 404
+    assert client.get("/clusters/99", params={"run_id": new_id}).status_code == 404
 
 
 def test_similar_cases_and_records_of_a_case(client, dsn, fleet):

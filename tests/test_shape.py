@@ -380,3 +380,43 @@ def test_a_record_outside_the_run_lands_where_its_twin_is():
 def test_a_tiny_group_has_no_map():
     out = shape.cluster_map([item(1, synth.peak()), item(2, synth.peak())])
     assert out["proj"] is None and out["points"] == {1: (0.0, 0.0), 2: (0.0, 0.0)}
+
+
+# ─── 주성분 (SL-CLU-10) ─────────────────────────────────────────────────────
+
+def pca_scope():
+    """`scope()` 와 같은 어긋남 — 다만 진폭(gain)이 거의 같다. 주성분은 진폭도 재료라 gain 이 크게 다르면 그것으로 갈린다."""
+    return ([("n", skewed(NONE, gain=1.0 + 0.02 * i)) for i in range(5)]
+            + [("r", skewed(RIGHT, gain=1.0 + 0.02 * i, cols=30 + 10 * i)) for i in range(3)]
+            + [("l", skewed(LEFT, gain=1.0 + 0.02 * i)) for i in range(3)])
+
+
+def test_pca_groups_by_where_channels_part_and_places_records_on_the_axes():
+    items = [{"id": i, "features": f, "scan_enum": "S"} for i, (_, f) in enumerate(pca_scope(), start=1)]
+    model = shape.pca_model(it["features"] for it in items)
+    assert model["kind"] == "area" and model["keys"] == ["tr", "txh", "tyh"] and len(model["components"]) >= 2
+    out = shape.cluster(items, "pca")
+    assert sorted(sorted(m["id"] for m in c["members"]) for c in out["clusters"]) ==         [[1, 2, 3, 4, 5], [6, 7, 8], [9, 10, 11]]
+    m = shape.cluster_map(items, "pca")
+    assert set(m["points"]) == {it["id"] for it in items} and m["proj"]["baseline"]["keys"] == ["tr", "txh", "tyh"]
+    # 결과에 없던 기록도 투영식만으로 같은 자리에 놓인다 — 정확한 선형 투영
+    assert shape.project_features(m["proj"], items[5]["features"]) == pytest.approx(m["points"][6], abs=1e-4)
+    axes = shape.pca_axes(m["proj"])
+    assert [a["axis"] for a in axes["axes"]] == [1, 2] and 0 < axes["explained"] <= 1
+    assert axes["axes"][0]["parts"][0]["channel"] == "txh"          # 갈리는 것은 txh 의 어긋남이다
+    parts = shape.pca_parts(m["proj"], items[5]["features"])
+    assert parts["distance"] > shape.pca_parts(m["proj"], items[0]["features"])["distance"]
+
+
+def test_pca_scores_like_skew_and_needs_the_scopes_channel_set():
+    recs = [f for _, f in pca_scope()]
+    model = shape.pca_model(recs)
+    c = [shape.pca_coords(model, f) for f in recs]
+    assert shape.pca_similarity(c[5], c[6]) > shape.CLUSTER_MIN
+    assert shape.pca_similarity(c[5], c[8]) < 0.3                    # 바탕은 같아도 어긋나는 자리가 다르다
+    assert shape.pca_similarity(c[5], None) is None
+    drop = {"version": recs[0]["version"], "channels": {k: v for k, v in recs[0]["channels"].items() if k != "tyh"}}
+    assert shape.pca_coords(model, drop) is None                    # 채널 집합이 다르면 이 범위의 주성분에 없다
+    assert shape.pca_model(recs[:2]) is None
+    with pytest.raises(ValueError):
+        shape.check_method("pcaa")

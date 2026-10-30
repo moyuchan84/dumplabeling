@@ -50,6 +50,16 @@ CLUSTER_MAX_N = 800      # 묶음 범위(스캔 종류 · 척 · 센서) 하나�
 CLUSTER_AGREE = 0.60     # 라벨된 구성원 중 이 비율 이상이 같은 노드여야 그 묶음의 분류
 MAP_LANDMARKS = 24       # 묶음 지도의 기준점 수 — 기록마다 이만큼만 비교해 2D 자리를 정한다
 
+METHODS = ("skew", "pca")  # 묶음 · 지도의 잣대 — 둘 다 저장하고 화면이 고른다 (SL-CLU-10)
+PCA_W = {"shape": 0.4, "skew": 0.4, "amp": 0.2}     # 주성분 재료의 몫 — 채널별 차이 · 채널 간 어긋남 · 크기
+PCA_MAT_W = {"area": {"x": 0.25, "z": 0.25, "grid": 0.5}, "line": {"path": 1.0}}
+PCA_GRID = 8             # 칸은 8×8 로 줄여 넣는다 — 피처 수를 줄이고 이웃 칸의 잡음을 평균한다
+PCA_PATH = 64            # 측정 순서 곡선도 반으로
+PCA_MAX_K = 10           # 남길 주성분의 최대 수
+PCA_VAR = 0.90           # 이만큼의 분산을 설명할 때까지 주성분을 남긴다
+PCA_FLOOR = 0.10         # 「평소」에서 이보다 덜 벗어난 차이는 잡음(값 하나당 RMS, 표준편차 · log 크기 단위)
+PCA_ITER = 300           # 주성분 반복의 상한 — 보통 수십 번에 수렴한다
+
 
 # ─── 값 읽기 ──────────────────────────────────────────────────────────────────
 
@@ -512,6 +522,270 @@ def skew_profiles(features: Mapping, baseline: Optional[Mapping] = None, *, grid
     return out
 
 
+# ─── 주성분 (PCA) — 묶음 · 지도의 두 번째 잣대 (SL-CLU-10) ───────────────────
+#
+# 한 묶음 범위 안에서 기록마다 세 가지 「평소와 다른 정도」를 한 줄로 늘어놓고 주성분으로 줄인다.
+#   shape — 채널마다 (제 표준편차로 정규화한 값) − 범위의 같은 채널 · 같은 자리 중앙값: 같은 항목끼리의 차이
+#   skew  — 자리마다 채널 간 편차 − 범위의 중앙값: `skew` 잣대와 같은 것
+#   amp   — 채널마다 log(표준편차) − 범위의 중앙값: 진폭(크기)이 평소와 다른 정도
+# 몫(`PCA_W`)은 값 하나당 RMS 로 맞춘다 — 범위가 고르면 벗어남도 작게 남는다(범위마다 다시 키우지 않는다).
+
+_PCA_MATS = {"area": ("x", "z", "grid"), "line": ("path",)}
+
+
+def _down_grid(g: list) -> list[Optional[float]]:
+    f = GRID_N // PCA_GRID
+    out: list[Optional[float]] = []
+    for r in range(PCA_GRID):
+        for c in range(PCA_GRID):
+            have = [g[(r * f + i) * GRID_N + c * f + j] for i in range(f) for j in range(f)]
+            have = [v for v in have if v is not None]
+            out.append(sum(have) / len(have) if have else None)
+    return out
+
+
+def _down(seq: list, n: int) -> list[Optional[float]]:
+    f = max(1, len(seq) // n)
+    out: list[Optional[float]] = []
+    for j in range(0, len(seq) - f + 1, f):
+        have = [v for v in seq[j:j + f] if v is not None]
+        out.append(sum(have) / len(have) if have else None)
+    return out
+
+
+def _pca_raw(features: Mapping) -> Optional[tuple[str, tuple[str, ...], list[tuple[str, str, list]]]]:
+    """기록 하나의 재료 — (종류, 채널들, [(part, mat, 값들)]). 값은 채널 순(이름 순)으로 이어 붙인다."""
+    kind, norm = _skew_norm(features)
+    if kind is None:
+        return None
+    keys = tuple(sorted(norm))
+    chans = features.get("channels") or {}
+    blocks: list[tuple[str, str, list]] = []
+    seqs: dict[str, list[list]] = {}
+    for m in _PCA_MATS[kind]:
+        seqs[m] = [(_down_grid(norm[k]["grid"]) if m == "grid" else
+                    _down(norm[k]["path"], PCA_PATH) if m == "path" else norm[k][m]) for k in keys]
+        blocks.append(("shape", m, [v for s in seqs[m] for v in s]))
+    for m in _PCA_MATS[kind]:
+        dev: list[list[Optional[float]]] = [[None] * len(seqs[m][0]) for _ in keys]
+        for j in range(len(seqs[m][0])):
+            vals = [s[j] for s in seqs[m]]
+            if any(v is None for v in vals):
+                continue
+            mu = sum(vals) / len(vals)
+            for i, v in enumerate(vals):
+                dev[i][j] = v - mu
+        blocks.append(("skew", m, [v for d in dev for v in d]))
+    amp = []
+    for k in keys:
+        std = ((chans.get(k) or {}).get("stats") or {}).get("std")
+        amp.append(math.log(std) if std and std > 0 else None)
+    blocks.append(("amp", "", amp))
+    return kind, keys, blocks
+
+
+def _pca_resid(model: Mapping, blocks: list[tuple[str, str, list]]) -> list[float]:
+    """재료 → 가중한 「평소와 다른 정도」 한 줄 (가운데로 옮기기 전). 빈 자리는 평소(0)."""
+    out: list[float] = []
+    pos = 0
+    for (_, _, vals), w in zip(blocks, model["factor"]):
+        med = model["median"][pos:pos + len(vals)]
+        out += [0.0 if v is None else (v - m) * w for v, m in zip(vals, med)]
+        pos += len(vals)
+    return out
+
+
+def _orth(vs: list[list[float]]) -> list[list[float]]:
+    """Gram–Schmidt (두 번) — 거의 0 인 벡터는 0 으로 남긴다(계수가 모자란 범위)."""
+    out: list[list[float]] = []
+    for v in vs:
+        w = v[:]
+        for _ in range(2):
+            for u in out:
+                d = _dot(u, w)
+                if d:
+                    w = [a - d * b for a, b in zip(w, u)]
+        nrm = math.sqrt(_dot(w, w))
+        out.append([a / nrm for a in w] if nrm > 1e-12 else [0.0] * len(w))
+    return out
+
+
+def _jacobi(a: list[list[float]]) -> tuple[list[float], list[list[float]]]:
+    """작은 대칭 행렬의 고윳값 · 고유벡터 (Jacobi 회전). 큰 것부터. 벡터는 행렬의 기저 좌표."""
+    k = len(a)
+    a = [r[:] for r in a]
+    v = [[float(i == j) for j in range(k)] for i in range(k)]
+    for _ in range(100):
+        if sum(a[i][j] ** 2 for i in range(k) for j in range(k) if i != j) < 1e-24:
+            break
+        for p in range(k):
+            for q in range(p + 1, k):
+                if abs(a[p][q]) < 1e-300:
+                    continue
+                th = (a[q][q] - a[p][p]) / (2.0 * a[p][q])
+                t = (1.0 if th >= 0 else -1.0) / (abs(th) + math.sqrt(th * th + 1.0))
+                c = 1.0 / math.sqrt(t * t + 1.0)
+                s = t * c
+                for r in range(k):
+                    arp, arq = a[r][p], a[r][q]
+                    a[r][p], a[r][q] = c * arp - s * arq, s * arp + c * arq
+                for r in range(k):
+                    apr, aqr = a[p][r], a[q][r]
+                    a[p][r], a[q][r] = c * apr - s * aqr, s * apr + c * aqr
+                for r in range(k):
+                    vrp, vrq = v[r][p], v[r][q]
+                    v[r][p], v[r][q] = c * vrp - s * vrq, s * vrp + c * vrq
+    order = sorted(range(k), key=lambda i: (-a[i][i], i))
+    return [a[i][i] for i in order], [[v[r][i] for r in range(k)] for i in order]
+
+
+def _top_pcs(rows: list[list[float]], k: int) -> tuple[list[float], list[list[float]]]:
+    """가운데로 옮긴 행들의 큰 주성분 k 개 — 부분공간 반복 + Rayleigh–Ritz. 표준 라이브러리만, 결정적.
+
+    공분산을 만들지 않고 Xᵀ(Xv) 로 곱한다 — 기록 n · 피처 d 일 때 한 번에 k·(n + d) 번의 내적.
+    """
+    n, d = len(rows), len(rows[0])
+    cols = [list(c) for c in zip(*rows)]
+
+    def cov(v: list[float]) -> list[float]:
+        xv = [_dot(r, v) for r in rows]
+        return [_dot(c, xv) / n for c in cols]
+    q = _orth([[math.sin((i + 1) * (j + 1.37)) for i in range(d)] for j in range(k)])
+    lam = [0.0] * k
+    for _ in range(PCA_ITER):
+        z = [cov(v) for v in q]
+        new = [_dot(a, b) for a, b in zip(q, z)]
+        q = _orth(z)
+        done = max(abs(a - b) for a, b in zip(new, lam)) <= 1e-9 * max(max(new), 1e-300)
+        lam = new
+        if done:
+            break
+    z = [cov(v) for v in q]
+    vals, vecs = _jacobi([[_dot(q[a], z[b]) for b in range(k)] for a in range(k)])
+    comps = []
+    for vec in vecs:
+        c = [sum(vec[a] * q[a][i] for a in range(k)) for i in range(d)]
+        big = max(range(d), key=lambda i: abs(c[i]))        # 부호를 정한다 — 가장 큰 값이 양수
+        comps.append([-x for x in c] if c[big] < 0 else c)
+    return [max(0.0, x) for x in vals], comps
+
+
+def pca_model(features_list: Iterable[Mapping]) -> Optional[dict]:
+    """묶음 범위 하나의 주성분 투영식 (SL-CLU-10). 기록이 `CLUSTER_MIN_SIZE` 보다 적으면 None.
+
+    가장 흔한 (종류, 채널 집합)의 기록으로만 낸다 — 다른 기록은 이 범위의 주성분에 놓이지 않는다
+    (`pca_coords` 가 None). 같은 투영식으로 결과에 없던 기록도 같은 자리에 놓는다(정확한 선형 투영).
+    """
+    raws = [_pca_raw(f) for f in features_list]
+    sets = [(r[0], r[1]) for r in raws if r is not None]
+    if not sets:
+        return None
+    (kind, keys), _ = max(((s, sets.count(s)) for s in set(sets)), key=lambda t: (t[1], t[0]))
+    same = [r[2] for r in raws if r is not None and (r[0], r[1]) == (kind, keys)]
+    n = len(same)
+    if n < CLUSTER_MIN_SIZE:
+        return None
+    layout, median, factor = [], [], []
+    for b, (part, mat, vals) in enumerate(same[0]):
+        layout.append({"part": part, "mat": mat, "len": len(vals)})
+        for j in range(len(vals)):
+            have = [s[b][2][j] for s in same if s[b][2][j] is not None]
+            median.append(round(statistics.median(have), 6) if have else 0.0)
+        w = PCA_W[part] * (PCA_MAT_W[kind][mat] if part != "amp" else 1.0)
+        factor.append(math.sqrt(w / len(vals)) if vals else 0.0)
+    model: dict[str, Any] = {"method": "pca", "kind": kind, "keys": list(keys), "layout": layout,
+                             "median": median, "factor": factor}
+    rows = [_pca_resid(model, s) for s in same]
+    d = len(rows[0])
+    mean = [sum(r[i] for r in rows) / n for i in range(d)]
+    centred = [[x - m for x, m in zip(r, mean)] for r in rows]
+    total = sum(_dot(r, r) for r in centred) / n
+    k0 = min(PCA_MAX_K, n - 1, d)
+    var, comps = _top_pcs(centred, k0) if total > 1e-18 and k0 > 0 else ([], [])
+    keep, acc = 0, 0.0
+    for v in var:
+        if v <= 1e-12 * max(total, 1e-300) or (keep >= 2 and acc >= PCA_VAR * total):
+            break
+        keep += 1
+        acc += v
+    model.update(mean=[round(x, 6) for x in mean], total=round(total, 9), n=n,
+                 var=[round(v, 9) for v in var[:keep]],
+                 components=[[round(x, 6) for x in c] for c in comps[:keep]])
+    return model
+
+
+def pca_coords(model: Mapping, features: Mapping) -> Optional[list[float]]:
+    """기록 하나의 주성분 좌표. 종류 · 채널 집합이 투영식과 다르면 None."""
+    raw = _pca_raw(features)
+    if raw is None or raw[0] != model["kind"] or list(raw[1]) != model["keys"]:
+        return None
+    x = [r - m for r, m in zip(_pca_resid(model, raw[2]), model["mean"])]
+    return [_dot(c, x) for c in model["components"]]
+
+
+def pca_similarity(u: Optional[list[float]], v: Optional[list[float]]) -> Optional[float]:
+    """주성분 좌표의 닮음 = (2·u·v + f) / (|u|² + |v|² + f), f = 2·PCA_FLOOR² — `skew` 잣대와 같은 꼴.
+
+    좌표는 범위의 평균에서 잰다: 자리 · 방향 · 크기가 같아야 1, 둘 다 평균 곁이면 1 쪽, 반대면 −1 쪽.
+    """
+    if u is None or v is None:
+        return None
+    f = 2.0 * PCA_FLOOR * PCA_FLOOR
+    return max(-1.0, min(1.0, (2.0 * _dot(u, v) + f) / (_dot(u, u) + _dot(v, v) + f)))
+
+
+def _pca_split(model: Mapping, vec: list[float]):
+    """피처 줄 → (part, mat, 채널, 값들) 로 다시 나눈다 — 축 읽기 · 기록 읽기용."""
+    keys = model["keys"]
+    pos = 0
+    for blk in model["layout"]:
+        seg = vec[pos:pos + blk["len"]]
+        pos += blk["len"]
+        per = blk["len"] // len(keys)
+        for i, k in enumerate(keys):
+            yield blk["part"], blk["mat"], k, seg[i * per:(i + 1) * per]
+
+
+def _shares(model: Mapping, vec: list[float]) -> list[dict]:
+    acc: dict[tuple[str, str], float] = {}
+    for part, _, k, vals in _pca_split(model, vec):
+        acc[(part, k)] = acc.get((part, k), 0.0) + _dot(vals, vals)
+    tot = sum(acc.values())
+    out = [{"part": p, "channel": k, "share": round(s / tot, 3) if tot else 0.0} for (p, k), s in acc.items()]
+    return sorted(out, key=lambda e: (-e["share"], e["part"], e["channel"]))
+
+
+def pca_axes(model: Mapping, n: int = 2) -> dict:
+    """지도의 축 읽기 — 축마다 설명하는 분산의 몫, (재료, 채널)별 무게의 몫, 1D 재료의 무게 곡선.
+
+    무게(loading)가 큰 자리일수록 그 축을 따라 기록이 갈린다. 곡선은 X · Z 단면(면) 또는 측정 순서
+    곡선(선)만 — 칸은 몫에만 넣는다.
+    """
+    total = model.get("total") or 0.0
+    axes = []
+    for a, comp in enumerate(model["components"][:n]):
+        lines: dict[str, dict[str, dict]] = {"shape": {}, "skew": {}}
+        amp: dict[str, float] = {}
+        for part, mat, k, vals in _pca_split(model, comp):
+            if part == "amp":
+                amp[k] = round(vals[0], 4)
+            elif mat != "grid":
+                lines[part].setdefault(k, {})["line" if mat == "path" else mat] = [round(x, 4) for x in vals]
+        axes.append({"axis": a + 1, "explained": round(model["var"][a] / total, 3) if total else 0.0,
+                     "parts": _shares(model, comp), "loadings": lines, "amp": amp})
+    return {"axes": axes, "kept": len(model["components"]),
+            "explained": round(sum(model["var"]) / total, 3) if total else 0.0, "n": model.get("n")}
+
+
+def pca_parts(model: Mapping, features: Mapping) -> Optional[dict]:
+    """기록 하나가 범위의 평소와 어디서 다른가 — 벗어남(값 하나당 RMS)과 (재료, 채널)별 몫."""
+    raw = _pca_raw(features)
+    if raw is None or raw[0] != model["kind"] or list(raw[1]) != model["keys"]:
+        return None
+    vec = _pca_resid(model, raw[2])
+    return {"distance": round(math.sqrt(_dot(vec, vec)), 4), "parts": _shares(model, vec)}
+
+
 # ─── 순위 · 단계별 제안 ──────────────────────────────────────────────────────
 
 def rank(target: Mapping, candidates: Iterable[Mapping], tree: Tree, *, k: int = 10) -> dict:
@@ -624,20 +898,42 @@ def group_key(scan_enum: Any, chuck_id: Any, sensor_id: Any) -> str:
     return f"{_txt(scan_enum)}|{_txt(chuck_id)}|{_txt(sensor_id)}"
 
 
-def cluster(items: list[Mapping]) -> dict:
+def _scorer(group: list[Mapping], method: str, model: Optional[Mapping]):
+    """묶음 범위 하나의 쌍 점수 — `skew`: 채널 간 편차(기준선을 빼고), `pca`: 주성분 좌표."""
+    if method == "pca":
+        coords = [pca_coords(model, g["features"]) if model else None for g in group]
+        return lambda i, j: pca_similarity(coords[i], coords[j])
+    base = skew_baseline(g["features"] for g in group)
+    prep = [prepare_skew(g["features"], base) for g in group]
+
+    def score(i: int, j: int) -> Optional[float]:
+        sim = skew_similarity(prep[i], prep[j])
+        return sim["score"] if sim else None
+    return score
+
+
+def check_method(method: str) -> None:
+    if method not in METHODS:
+        raise ValueError(f"묶음 잣대는 {', '.join(METHODS)} 중 하나: {method!r}")
+
+
+def cluster(items: list[Mapping], method: str = "skew", *, models: Optional[Mapping] = None) -> dict:
     """라벨과 무관하게 본 기록들을 모양으로 묶는다 (SL-CLU-2).
 
     items 의 각 항목: `id` · `features` · `scan_enum` · `chuck_id` · `sensor_id`(없으면 ''). 호출자가 범위마다
     `CLUSTER_MAX_N` 개로 잘라서 넣는다. **(스캔 종류, 척, 센서)** 마다 따로 묶는다 — 경로가 다르면 1D 비교가
     무의미하고(SL-SIM-2), 척 · 센서가 다르면 신호의 기준이 달라 모양의 차이가 원인의 차이가 아니다(SL-CLU-3).
 
-    잣대는 **채널 간 편차**(`skew_similarity`, SL-CLU-9)다. 방법(대표 기록 묶음): 모든 쌍을 비교해
+    잣대는 `method` — **채널 간 편차**(`skew`, SL-CLU-9) 또는 **주성분**(`pca`, SL-CLU-10; `models` 는
+    범위 → `pca_model`, 없으면 여기서 낸다). 투영식에 놓이지 않는 기록은 「묶이지 않음」이다.
+    방법(대표 기록 묶음): 모든 쌍을 비교해
     `CLUSTER_MIN` 이상인 이웃을 센다. 남은 기록 중 이웃이
     가장 많은 것을 **대표**로 고르고, 그 대표와 `CLUSTER_MIN` 이상인 남은 기록을 한 묶음으로 뗀다.
     묶음이 `CLUSTER_MIN_SIZE` 보다 작아지면 멈추고 나머지는 「묶이지 않음」이다. 구성원 모두가
     **대표와 직접** 닮았으므로 한 묶음이 사슬처럼 늘어나 서로 다른 모양을 잇지 않는다.
     결과는 결정적이다(동점은 이웃 점수 합, 그다음 id).
     """
+    check_method(method)
     groups: dict[tuple[str, str, str], list[Mapping]] = {}
     for it in items:
         groups.setdefault(group_of(it), []).append(it)
@@ -647,14 +943,16 @@ def cluster(items: list[Mapping]) -> dict:
     for scan_enum, chuck_id, sensor_id in sorted(groups):
         group = groups[(scan_enum, chuck_id, sensor_id)]
         ids = [g["id"] for g in group]
-        base = skew_baseline(g["features"] for g in group)
-        prep = [prepare_skew(g["features"], base) for g in group]
+        model = None
+        if method == "pca":
+            gid = (scan_enum, chuck_id, sensor_id)
+            model = models[gid] if models is not None and gid in models else                 pca_model(g["features"] for g in group)
+        score = _scorer(group, method, model)
         n = len(group)
         nb: list[dict[int, float]] = [{} for _ in range(n)]
         for i in range(n):
             for j in range(i + 1, n):
-                sim = skew_similarity(prep[i], prep[j])
-                s = sim["score"] if sim else None
+                s = score(i, j)
                 if s is not None and s >= CLUSTER_MIN:
                     nb[i][j] = s
                     nb[j][i] = s
@@ -716,8 +1014,11 @@ def _top2(b: list[list[float]]) -> list[tuple[float, list[float]]]:
     return out
 
 
-def cluster_map(items: list[Mapping]) -> dict:
+def cluster_map(items: list[Mapping], method: str = "skew", *, model: Optional[Mapping] = None) -> dict:
     """묶음 범위(스캔 종류 · 척 · 센서) 하나의 기록들을 2D 에 놓는다 — 가까울수록 채널 간 편차가 닮았다 (SL-MAP-1).
+
+    `method="pca"`(SL-CLU-10): 자리 = 첫째 · 둘째 주성분 좌표 그대로(근사가 아니라 투영, 축에 뜻이 있다).
+    투영식 = `pca_model`(+ 화면이 그릴 채널 간 편차의 기준선). 투영식에 놓이지 않는 기록은 점이 없다.
 
     방법(landmark MDS): 서로 가장 먼 기록을 차례로 `MAP_LANDMARKS` 개 고르고(maxmin), 그 기준점끼리의
     거리로 고전 MDS 를 풀어 2D 자리를 정한 뒤, 나머지 기록은 **기준점까지의 거리만으로** 같은 공간에
@@ -728,7 +1029,19 @@ def cluster_map(items: list[Mapping]) -> dict:
 
     반환: {"points": {id: (x, y)}, "proj": {"landmarks": [id…], "pinv": [[…], […]], "mean": […], "baseline": …}}
     """
+    check_method(method)
     n = len(items)
+    if method == "pca":
+        model = model if model is not None else pca_model(it["features"] for it in items)
+        if model is None:
+            return {"points": {it["id"]: (0.0, 0.0) for it in items}, "proj": None}
+        proj = {**model, "baseline": skew_baseline(it["features"] for it in items)}
+        points = {}
+        for it in items:
+            c = pca_coords(model, it["features"])
+            if c is not None:
+                points[it["id"]] = _xy(c)
+        return {"points": points, "proj": proj}
     if n < 3:
         return {"points": {it["id"]: (0.0, 0.0) for it in items}, "proj": None}
     base = skew_baseline(it["features"] for it in items)
@@ -765,8 +1078,19 @@ def project(proj: Mapping, dists: list[float]) -> tuple[float, float]:
     return (round(x, 5), round(y, 5))
 
 
-def project_features(proj: Mapping, features: Mapping, landmark_features: list[Mapping]) -> tuple[float, float]:
-    """결과에 없던 기록 하나를 같은 지도에 놓는다 — 기준점과 `MAP_LANDMARKS` 번만 비교한다."""
+def _xy(c: list[float]) -> tuple[float, float]:
+    return (round(c[0], 5) if c else 0.0, round(c[1], 5) if len(c) > 1 else 0.0)
+
+
+def project_features(proj: Mapping, features: Mapping,
+                     landmark_features: Optional[list[Mapping]] = None) -> Optional[tuple[float, float]]:
+    """결과에 없던 기록 하나를 같은 지도에 놓는다 — 기준점과 `MAP_LANDMARKS` 번만 비교한다.
+
+    주성분 지도(`proj["method"] == "pca"`)는 기준점 없이 투영식만으로 놓는다. 놓을 수 없으면 None.
+    """
+    if proj.get("method") == "pca":
+        c = pca_coords(proj, features)
+        return None if c is None else _xy(c)
     base = proj.get("baseline")
     p = prepare_skew(features, base)
     return project(proj, [_dist(p, prepare_skew(lf, base)) for lf in landmark_features])
@@ -816,6 +1140,66 @@ def cluster_category(member_labels: list[list[int]], tree: Tree) -> dict:
         if agreed:
             category = {**levels[level][0], "level": level}
     return {"labelled": n, "unlabelled": len(member_labels) - n, "levels": levels, "category": category}
+
+
+def cluster_quality(result: Mapping, labels: Mapping[Any, list[int]], tree: Tree) -> dict:
+    """묶음 결과를 라벨로 잰다 — 두 잣대(SL-CLU-10)를 실데이터로 견주는 숫자.
+
+    `labels` = 기록 id → 붙은 라벨 id. 단계 L 의 **순도** = 묶음마다 (가장 많은 노드를 가진 구성원 수)의
+    합 / (그 단계까지 라벨된 묶인 구성원 수). **덮음** = 라벨된 기록 중 어느 묶음에든 든 몫. 묶음 수가
+    많고 작을수록 순도는 쉽게 오른다 — 둘을 함께 본다.
+    """
+    ids = [m["id"] for c in result["clusters"] for m in c["members"]] + list(result["unclustered"])
+    labelled = {i for i in ids if any(int(x) in tree for x in labels.get(i) or [])}
+    clustered = {m["id"] for c in result["clusters"] for m in c["members"]} & labelled
+    purity: dict[str, Optional[float]] = {}
+    for level in range(1, MAX_LEVEL + 1):
+        hit = tot = 0
+        for c in result["clusters"]:
+            sets = []
+            for m in c["members"]:
+                if m["id"] in labelled:
+                    nodes = {x for x in tree.closure(int(i) for i in labels[m["id"]] if int(i) in tree)
+                             if int(tree.get(x)["level"]) == level}
+                    if nodes:
+                        sets.append(nodes)
+            if not sets:
+                continue
+            counts: dict[int, int] = {}
+            for s in sets:
+                for x in s:
+                    counts[x] = counts.get(x, 0) + 1
+            hit += max(counts.values())
+            tot += len(sets)
+        purity[str(level)] = round(hit / tot, 3) if tot else None
+    return {"labelled": len(labelled), "clustered_labelled": len(clustered),
+            "coverage": round(len(clustered) / len(labelled), 3) if labelled else None, "purity": purity}
+
+
+def partition_agreement(a: Mapping, b: Mapping) -> Optional[float]:
+    """두 묶음 결과가 얼마나 같게 갈랐나 — adjusted Rand index (1 같음, 0 우연 수준). 묶이지 않은 기록은 혼자."""
+    def lab(r: Mapping) -> dict:
+        out = {m["id"]: f"c{n}" for n, c in enumerate(r["clusters"]) for m in c["members"]}
+        out.update({i: f"u{i}" for i in r["unclustered"]})
+        return out
+    la, lb = lab(a), lab(b)
+    ids = sorted(la.keys() & lb.keys(), key=str)
+    n = len(ids)
+    if n < 2:
+        return None
+    pair = lambda x: x * (x - 1) / 2
+    cells: dict[tuple, int] = {}
+    ra: dict[str, int] = {}
+    rb: dict[str, int] = {}
+    for i in ids:
+        cells[(la[i], lb[i])] = cells.get((la[i], lb[i]), 0) + 1
+        ra[la[i]] = ra.get(la[i], 0) + 1
+        rb[lb[i]] = rb.get(lb[i], 0) + 1
+    index = sum(pair(v) for v in cells.values())
+    sa, sb = sum(pair(v) for v in ra.values()), sum(pair(v) for v in rb.values())
+    expected = sa * sb / pair(n)
+    top = (sa + sb) / 2
+    return 1.0 if top == expected else round((index - expected) / (top - expected), 3)
 
 
 def evaluate(labelled: list[Mapping], tree: Tree, *, same_scan_only: bool = True) -> dict:
