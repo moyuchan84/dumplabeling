@@ -171,7 +171,7 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 - `SL-POOL-2` `jobs index` follows fleet's `GET /generations` with its own cursor (`index_cursors`), reads each new
   file **from cache only** and puts its records in the pool; a file whose cache is gone is reported as `skipped`.
   It is the periodic way to include files nobody opened. [test: "test_index_follows_the_generation_cursor_without_ftp"]
-- `SL-POOL-3` A pool row is rewritten only when its generation, feature version, scan kind or sensor changes; that rewrite
+- `SL-POOL-3` A pool row is rewritten only when its generation, feature version, scan kind, chuck or sensor changes; that rewrite
   takes a new `seq`. Re-opening an unchanged file changes nothing — so it does not make the clusters stale.
 - `SL-POOL-4` `jobs refeature` rebuilds stale pool rows as well as labelled ones: one comparison definition across
   the pool.
@@ -182,20 +182,22 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   run per set is kept), so the screen, the cluster numbers and a bulk label all refer to the same result. It runs on
   request (`POST /clusters/run`, the screen's 「다시 묶기」) or from `jobs cluster`; nothing re-clusters behind a
   reader's back. A run remembers the pool's highest `seq`; a higher one in the pool makes it `stale`.
-- `SL-CLU-2` The method is **representative-seeded grouping**: all pairs within one scan kind are compared, the
-  record with the most neighbours ≥ `CLUSTER_MIN` (0.80) becomes a representative, it and its remaining neighbours
+- `SL-CLU-2` The method is **representative-seeded grouping**: all pairs within one group (`SL-CLU-3`) are compared
+  by the **inter-channel skew score** (`SL-CLU-9`), the record with the most neighbours ≥ `CLUSTER_MIN` (0.80) becomes a
+  representative, it and its remaining neighbours
   form a cluster, repeat; groups smaller than `CLUSTER_MIN_SIZE` (3) stay unclustered. Every member resembles the
   representative **directly**, so a cluster cannot chain unlike shapes together; ties break by neighbour score sum,
   then id — deterministic.
   [test: "test_clusters_group_like_shapes_and_leave_the_rest_unclustered" · "test_clusters_never_mix_scan_kinds"]
-- `SL-CLU-3` Clusters never cross a **group = (scan kind, sensor)** (`SL-SIM-2`; migration `0005`). Different
-  scan kinds walked different trajectories; different sensors on one kind read on a different baseline, so mixing
-  them makes "a different sensor" look like "a different shape" (2026-10-28, the user: 「실제 clustering 할때
-  데이터에서 sensor_id + scan_enum 까지 grouping 해야할거같은데」 — cluster by sensor_id + scan_enum). The sensor is
-  `meta.sensor_id` as text, `""` when absent, stored as `scan_records.sensor_id`. Each group is capped at the `CLUSTER_MAX_N` (800) most
+- `SL-CLU-3` Clusters never cross a **group = (scan kind, chuck, sensor)** (`SL-SIM-2`; migrations `0005` · `0006`).
+  Different scan kinds walked different trajectories; different sensors or chucks on one kind read on a different
+  baseline, so mixing them makes "a different sensor/chuck" look like "a different shape" (2026-10-28, the user:
+  「실제 clustering 할때 데이터에서 sensor_id + scan_enum 까지 grouping 해야할거같은데」; 2026-10-30: 「scan_enum / chuck_id /
+  sensor_id 가 grouping key 로 묶어야하고」). The chuck and sensor are `meta.chuck_id` · `meta.sensor_id` as text, `""`
+  when absent, stored as `scan_records.chuck_id` · `scan_records.sensor_id`. Each group is capped at the `CLUSTER_MAX_N` (800) most
   recently changed records — the comparison is n², measured at ≈ 6 s for 800 (`math.sumprod`, prepared z-scores,
   `shape.prepare`, which scores exactly like the raw snapshot); the cut is reported as `truncated`.
-  [test: "test_prepared_features_score_exactly_like_raw_snapshots" · "test_clusters_never_mix_sensors_of_one_scan_kind" · "test_clusters_and_the_map_are_per_scan_kind_and_sensor"]
+  [test: "test_prepared_features_score_exactly_like_raw_snapshots" · "test_clusters_never_mix_sensors_of_one_scan_kind" · "test_clusters_never_mix_chucks_of_one_scan_kind_and_sensor" · "test_clusters_and_the_map_are_per_scan_kind_and_sensor" · "test_clusters_and_the_map_are_per_scan_kind_chuck_and_sensor"]
   Not yet: the suggestion scope (`same_scan_only`, `SL-SIM-2`) is still the scan kind alone.
 - `SL-CLU-4` A cluster's **category** is read off its labelled members per level, each label counting for its
   ancestors (`SL-SUG-1`): a level agrees when its top node holds ≥ `CLUSTER_AGREE` (0.60) of the labelled members,
@@ -215,24 +217,57 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   is not seen there — its result is, through the stored run). Reason (2026-10-15): the run took 18 s on 2,400 records
   and the front end's proxy hung up first, so the screen saw a 500. [test: "test_rerun_returns_at_once_and_reports_its_state"]
   Rejected: a longer proxy timeout (the run grows n², and any request holding a proxy socket for tens of seconds
-  fails somewhere else next).
+  fails somewhere else next). `GET /clusters` reads the job **before** the stored run — the other order could answer
+  `done` with the run from before it (or none) when the job ends between the two reads (seen as a flaky test,
+  2026-10-30).
+- `SL-CLU-9` **Clusters and the map are measured by inter-channel skew, not by shape** (2026-10-30, the user:
+  「value 하위에 있는 key 의 array 간의 skew (tr, txh, tyh 등 같은 index 값들간의 그래프의 편차)가 dump error 의 labeling
+  clustering 의 key」 — the skew between the `value` arrays, the spread of tr · txh · tyh at the same index, is what
+  tells dump errors apart). Per record: every channel's materials (area scan: cells, X profile, Z profile; line scan:
+  the scan-order curve — the slots line up across channels because the channels share `xyz`) are scaled by **that
+  channel's own point mean and std** from the snapshot (`stats`) — a cell mean is linear in the points, so this equals
+  scaling each point and then averaging, and needs no source data and no `FEATURE_VERSION` bump. At every slot the
+  **deviation** of each channel from the mean over channels is taken (a slot any channel lacks is skipped). The group's
+  **baseline** — the per-slot **median** deviation over the group's records with the group's most common channel set
+  (`skew_baseline`, none under `CLUSTER_MIN_SIZE` records) — is subtracted, leaving what is unusual for this record.
+  Two records score `(2·u·v + f) / (|u|² + |v|² + f)` over the slots both have, `f = 2·n·SKEW_FLOOR²` (`SKEW_FLOOR` =
+  0.10 channel-std RMS): 1 = same place, direction and size; two records whose channels agree (both under the floor)
+  score near 1; one skewed and one not near 0; opposite near −1. Area: `W_1D`·mean(X, Z) + `W_2D`·cells; line: the curve.
+  Fewer than two common channels = no score (the record never joins a cluster; map distance 1). The run stores each
+  group's baseline in its projection (`maps`), and the record detail scores and draws against it. Suggestions
+  (`SL-SUG`, `rank`) still use shape similarity (`SL-SIM`) — the change is for clustering only.
+  [test: "test_skew_compares_where_channels_part_not_the_shared_shape" · "test_the_baseline_takes_away_the_usual_offset_between_channels" · "test_skew_needs_two_common_channels_and_uses_only_the_common_ones" · "test_prepared_skew_scores_exactly_like_raw_snapshots" · "test_clusters_group_by_where_channels_part"]
+  Why the baseline: when one channel always runs opposite (or ahead of) the others, that fixed deviation is the same in
+  every record and buries the error's deviation — without it, two records skewed at opposite ends of the scan scored
+  0.96 in the synthetic test. Rejected: Pearson correlation of the deviations (z-scoring them again throws away the
+  size of the skew, and turns a record whose channels agree into noise that correlates at random); the mean as the
+  baseline (one large cluster would pull it toward its own skew and erase it).
+  Validation (local pool, 5,044 records, 714 labels, demo channels `A`/`B` — **not** real tr/txh/tyh data, and the
+  labels were given by shape): label pairs in the same group scoring ≥ 0.8 — same label 59 % / different label 6 %
+  (skew without the baseline: 98 % / 51 %; shape: 88 % / 1 %). Clusters: skew 89 clusters, 177 unclustered, label
+  purity 0.869; shape with the same groups 121 / 114 / 0.984; before this change (shape, (scan kind, sensor)) 82 / 74 /
+  0.984. `jobs cluster` 39 s (shape 42 s). Revisit when real tr/txh/tyh records are labelled: compare the two
+  measures' purity there, and tune `SKEW_FLOOR` / `CLUSTER_MIN` for skew.
 
 ## Cluster map (SL-MAP)
 
-- `SL-MAP-1` A cluster run also places every record it covered — clustered or not — in 2D, **per group (scan kind, sensor)**
-  (`cluster_points`, migration `0004`): near = alike. Method: landmark MDS — `MAP_LANDMARKS` (24) records picked
-  max-min apart by distance `1 − score`, classical MDS on those, every other record projected from its distances to
+- `SL-MAP-1` A cluster run also places every record it covered — clustered or not — in 2D, **per group (scan kind,
+  chuck, sensor)** (`cluster_points`, migration `0004`): near = alike **in inter-channel skew** (`SL-CLU-9`, the
+  clusters' own measure). Method: landmark MDS — `MAP_LANDMARKS` (24) records picked max-min apart by distance
+  `1 − skew score`, classical MDS on those, every other record projected from its distances to
   the landmarks only (24 comparisons each). It is an approximation and is said to be one.
   [test: "test_the_map_puts_like_shapes_together_and_unlike_ones_apart"]
-- `SL-MAP-2` The run stores the projection (`cluster_runs.maps`: landmark ids, pseudo-inverse, mean), so a record
+- `SL-MAP-2` The run stores the projection (`cluster_runs.maps`: landmark ids, pseudo-inverse, mean, skew baseline), so a record
   **outside the run** — seen after it, or cut by the cap — is placed on the same map without re-running: its features
   (from the pool, else fleet's cache) against the landmarks. Such a target says `in_run: false` and has no cluster.
   [test: "test_a_record_outside_the_run_lands_where_its_twin_is" · "test_the_map_places_every_record_and_the_one_on_screen"]
-- `SL-MAP-3` `GET /clusters/map` answers one group (`scan_enum` + `sensor_id`; default: the asked record's, else the
-  largest; a run from before `0005` keyed its maps by scan kind alone and answers `has_map: false`): points
+- `SL-MAP-3` `GET /clusters/map` answers one group (`scan_enum` + `chuck_id` + `sensor_id`; default: the asked record's,
+  else the largest; a run from before `0006` keyed its maps without the chuck and answers `has_map: false`): points
   `{id, x, y, c, l}` (cluster number or null, labelled or not), each cluster's size and agreed category, and the asked
-  record's place. `GET /records/{id}` is a pool record's detail — labels, cluster, normalised curves, and with `vs_*`
-  its similarity to the record on screen. A group under 3 records has no map.
+  record's place. `GET /records/{id}` is a pool record's detail — labels, cluster, normalised curves and skew curves,
+  and with `vs_*` its shape and skew scores against the record on screen. **Every drawn material is normalised from
+  its own record only** (plus the group's baseline for skew), so the record on screen draws the same whichever point is
+  opened; the comparison lives in the scores. A group under 3 records has no map.
   [test: "test_a_tiny_group_has_no_map"]
 - `SL-MAP-4` Rejected: t-SNE/UMAP (no numpy, `SL-X-6`; and neither places a new record without re-running);
   full classical MDS (an n×n eigenproblem — 800² in pure Python); drawing clusters by colour (the screen's decision,

@@ -15,7 +15,7 @@ needs a stored fact, the caller passes it in (`Tree`, `candidates`, `member_labe
 ### `shape.py` — shape features, similarity, ranking, clusters, map, evaluation
 - **Every threshold and weight is a module constant here and nowhere else** (`SL-SUG-4` · `SL-CLU-7`):
   `FEATURE_VERSION` · `PATH_N` · `GRID_N` · `MIN_OVERLAP` · `PROFILE_MIN` · `FLAT_REL` · `W_1D`/`W_2D` · `SUGGEST_MIN` · `MARGIN`
-  · `EVIDENCE_MIN` · `LEVEL_TOP` · `CASE_TOP` · `CLUSTER_MIN` · `CLUSTER_MIN_SIZE` · `CLUSTER_MAX_N` ·
+  · `EVIDENCE_MIN` · `LEVEL_TOP` · `CASE_TOP` · `CLUSTER_MIN` · `SKEW_FLOOR` · `CLUSTER_MIN_SIZE` · `CLUSTER_MAX_N` ·
   `CLUSTER_AGREE` · `MAP_LANDMARKS`. A change to one is a behaviour change: run `jobs eval` on the real labels
   and put the numbers in the commit message.
 - Features: `num` (poc_viewer's `num()` rule) · `channel_features` · `record_features` (the snapshot, before
@@ -24,6 +24,10 @@ needs a stored fact, the caller passes it in (`Tree`, `candidates`, `member_labe
   area scan: X profile, Z profile, cells; line scan: the scan-order curve — and z-scores each once, on its own;
   scores exactly like the raw snapshot) · `similarity` (score + scale ratio, `None` when no common channel; an
   area scan and a line scan are not compared) · `normalized_profiles` (what the screen draws, `SL-SIM-1`).
+- Inter-channel skew — the clusters' and the map's measure (`SL-CLU-9`): `skew_baseline` (the group's per-slot median
+  deviation) · `prepare_skew` (each channel scaled by its own point stats, the deviation from the channel mean at each
+  slot, minus the baseline, packed for `math.sumprod`) · `skew_similarity` · `skew_profiles` (what the screen draws).
+  Grouping: `group_of` / `group_key` — (scan kind, chuck, sensor).
 - Reading scores: `rank` (per-level ranking with the tree roll-up, the "sure" levels) · `similar_cases` ·
   `cluster` (representative-seeded grouping) · `cluster_category` · `cluster_map` / `project` /
   `project_features` (landmark MDS, `SL-MAP-1`) · `evaluate` (leave-one-out).

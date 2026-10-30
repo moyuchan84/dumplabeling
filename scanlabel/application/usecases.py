@@ -114,6 +114,7 @@ def pool_rows(f: FileScans, scans: Optional[Iterable[Scan]] = None) -> list[dict
         out.append({"servername": f.servername, "server_id": f.server_id, "set_name": f.set_name,
                     "name": f.name, "source": s.source, "sig": f.sig,
                     "scan_enum": str(meta.get("scan_enum") or ""),
+                    "chuck_id": "" if meta.get("chuck_id") is None else str(meta["chuck_id"]),
                     "sensor_id": "" if meta.get("sensor_id") is None else str(meta["sensor_id"]), "meta": meta,
                     "features": shape.record_features(s.scan), "feature_version": shape.FEATURE_VERSION})
     return out
@@ -160,17 +161,17 @@ def run_clusters(store: Store, *, set_name: str) -> dict:
     """풀 전체를 다시 묶어 저장한다 (SL-CLU-1). 반환 = 저장된 결과의 요약."""
     rows, total, truncated, seq = store.pool(set_name=set_name, per_scan_limit=shape.CLUSTER_MAX_N)
     result = shape.cluster(rows)
-    # 묶음 지도 — 묶음 범위(스캔 종류, 센서)마다 따로 (SL-MAP-1). rows 는 id 순이라 결과가 결정적이다.
+    # 묶음 지도 — 묶음 범위(스캔 종류, 척, 센서)마다 따로 (SL-MAP-1). rows 는 id 순이라 결과가 결정적이다.
     maps: dict[str, dict] = {}
     points: list[tuple] = []
-    kinds: dict[tuple[str, str], list[dict]] = {}
+    kinds: dict[tuple[str, str, str], list[dict]] = {}
     for r in rows:
-        kinds.setdefault((str(r["scan_enum"] or ""), str(r["sensor_id"] or "")), []).append(r)
-    for (scan_enum, sensor_id), group in kinds.items():
+        kinds.setdefault(shape.group_of(r), []).append(r)
+    for group_id, group in kinds.items():
         m = shape.cluster_map(group)
         if m["proj"] is not None:
-            maps[shape.group_key(scan_enum, sensor_id)] = m["proj"]
-        points += [(rid, scan_enum, sensor_id, x, y) for rid, (x, y) in m["points"].items()]
+            maps[shape.group_key(*group_id)] = m["proj"]
+        points += [(rid, *group_id, x, y) for rid, (x, y) in m["points"].items()]
     run_id = store.save_cluster_run(
         set_name=set_name, result=result, n_records=len(rows), truncated=truncated, pool_seq=seq,
         threshold=shape.CLUSTER_MIN, min_size=shape.CLUSTER_MIN_SIZE,

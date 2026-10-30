@@ -24,9 +24,9 @@ def scan(shape: Callable[[float, float], float], *, cols: int = 30, rows: int = 
             "xyz": {"x": xs, "y": [0.0] * len(xs), "z": zs}}
 
 
-def meta(pair: str, scan_enum: str = "FINEHORVERT_SCAN", sensor_id: int = 2) -> dict:
+def meta(pair: str, scan_enum: str = "FINEHORVERT_SCAN", sensor_id: int = 2, chuck_id: str = "CH1") -> dict:
     return {"source": pair.replace("RAW_DATA", "SPEC"), "kind": "SCAN_SPEC_META@v1", "pair": pair,
-            "scan_enum": scan_enum, "chuck_id": "CH1", "sensor_id": sensor_id,
+            "scan_enum": scan_enum, "chuck_id": chuck_id, "sensor_id": sensor_id,
             "scan_queued": "2026-08-11T00:57:20+09:00", "timestamp": "2026-08-11T00:59:03+09:00",
             "results": []}
 
