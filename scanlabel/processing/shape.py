@@ -14,7 +14,9 @@
 
 묶음 · 지도는 모양 대신 **채널 간 편차(skew)**로 잰다 — 같은 자리(칸 · 단면 칸 · 경로 칸)에서 채널마다
 (제 정규화 값 − 채널 평균). dump 오류는 한 채널의 모양보다 채널(tr · txh · tyh …)끼리 어긋나는 자리와 방향으로
-갈린다(SL-CLU-9). 라벨 제안(`rank`)은 그대로 모양 유사도다.
+갈린다(SL-CLU-9). 면 스캔의 편차에는 **측정 순서 곡선도** 넣는다(SL-CLU-11) — 채널은 `xyz` 를 함께 쓰므로 같은
+인덱스는 같은 점이고, 경로 칸 하나에 행이 꺾이는 자리가 섞여도 모든 채널에 똑같이 섞여 채널끼리의 어긋남은
+남는다. 라벨 제안(`rank`)은 그대로 모양 유사도다(모양에는 측정 순서 곡선을 쓰지 않는다, SL-SIM-1).
 
 문턱값 · 가중치는 **휴리스틱**이다. `evaluate`(leave-one-out 적중률)로 재고 여기서만 고친다.
 """
@@ -33,6 +35,7 @@ GRID_N = 16
 
 W_1D = 0.5               # 채널 점수 = 가중 평균(있는 쪽만)
 W_2D = 0.5
+W_SEQ = 0.5              # 면 스캔 편차의 측정 순서 곡선 몫(SL-CLU-11) — 단면 · 칸 · 측정 순서가 1/3 씩
 MIN_OVERLAP = 16         # 2D 상관을 낼 최소 공통 칸 수
 PROFILE_MIN = 8          # 단면(X · Z) 상관을 낼 최소 공통 자리 수 (단면 길이 = GRID_N)
 FLAT_REL = 1e-6          # 범위가 크기의 이 비율 이하면 평평한 신호
@@ -52,7 +55,7 @@ MAP_LANDMARKS = 24       # 묶음 지도의 기준점 수 — 기록마다 이�
 
 METHODS = ("skew", "pca")  # 묶음 · 지도의 잣대 — 둘 다 저장하고 화면이 고른다 (SL-CLU-10)
 PCA_W = {"shape": 0.4, "skew": 0.4, "amp": 0.2}     # 주성분 재료의 몫 — 채널별 차이 · 채널 간 어긋남 · 크기
-PCA_MAT_W = {"area": {"x": 0.25, "z": 0.25, "grid": 0.5}, "line": {"path": 1.0}}
+PCA_MAT_W = {"area": {"x": 0.2, "z": 0.2, "grid": 0.3, "path": 0.3}, "line": {"path": 1.0}}
 PCA_GRID = 8             # 칸은 8×8 로 줄여 넣는다 — 피처 수를 줄이고 이웃 칸의 잡음을 평균한다
 PCA_PATH = 64            # 측정 순서 곡선도 반으로
 PCA_MAX_K = 10           # 남길 주성분의 최대 수
@@ -355,8 +358,8 @@ def normalized_profiles(features: Mapping, keys: Optional[Iterable[str]] = None,
 def _skew_norm(features: Mapping) -> tuple[Optional[str], dict[str, dict[str, list]]]:
     """채널마다 비교 재료를 **그 채널의 점 통계(mean · std)**로 정규화한다 — 단위가 다른 채널을 한 자로.
 
-    면 스캔: 칸 · X 단면 · Z 단면, 선 스캔: 측정 순서 곡선. 칸 평균은 점 값의 선형 평균이라 점마다
-    정규화한 뒤 칸에서 평균한 것과 같다 — 원본 없이 스냅샷만으로 계산된다. 평평한 채널은 0 선.
+    면 스캔: 칸 · X 단면 · Z 단면 · 측정 순서 곡선(SL-CLU-11), 선 스캔: 측정 순서 곡선. 칸 평균은 점 값의
+    선형 평균이라 점마다 정규화한 뒤 칸에서 평균한 것과 같다 — 원본 없이 스냅샷만으로 계산된다. 평평한 채널은 0 선.
     """
     chans = features.get("channels") or {}
     area = {k: ch for k, ch in chans.items() if (ch or {}).get("grid")}
@@ -372,13 +375,20 @@ def _skew_norm(features: Mapping) -> tuple[Optional[str], dict[str, dict[str, li
             return [None if v is None else (0.0 if flat else (v - mean) / std) for v in vals]
         if kind == "area":
             g = z(ch["grid"])
-            out[str(key)] = {"grid": g, **(profiles(g) or {})}
+            out[str(key)] = {"grid": g, **(profiles(g) or {}), "path": z(ch.get("path") or [])}
         else:
             out[str(key)] = {"path": z(ch["path"])}
     return (kind if out else None), out
 
 
-_SKEW_MATS = {"area": ("x", "z", "grid"), "line": ("path",)}
+_SKEW_MATS = {"area": ("x", "z", "grid", "path"), "line": ("path",)}
+
+
+def _base_fits(baseline: Optional[Mapping], kind: Optional[str], keys: list[str]) -> bool:
+    """기준선이 이 기록의 종류 · 채널 집합 · 재료와 맞나. SL-CLU-11 전에 저장된 면 스캔 기준선에는
+    측정 순서 곡선이 없다 — 그 기준선은 쓰지 않는다(다시 묶으면 새것이 저장된다)."""
+    return bool(baseline and kind and baseline["kind"] == kind and baseline["keys"] == keys
+                and all(m in baseline["mats"] for m in _SKEW_MATS[kind]))
 
 
 def _skew_dev(norm: Mapping, keys: list[str], mat: str) -> list[Optional[list[float]]]:
@@ -443,7 +453,7 @@ def prepare_skew(features: Mapping, baseline: Optional[Mapping] = None) -> dict:
     centred = False
     if kind and len(keys) >= 2:
         full = {m: _skew_pack(_skew_dev(norm, keys, m), len(keys)) for m in _SKEW_MATS[kind]}
-        if baseline and baseline["kind"] == kind and baseline["keys"] == keys:
+        if _base_fits(baseline, kind, keys):
             centred = True
             for m, (v, _, mask) in full.items():
                 v = [x - b * k for x, b, k in zip(v, baseline["mats"][m], mask)]
@@ -470,7 +480,8 @@ def skew_similarity(a: Mapping, b: Mapping) -> Optional[dict]:
     """채널 간 편차의 닮음 — 묶음 · 지도의 잣대 (SL-CLU-9). 스냅샷이나 `prepare_skew` 한 것을 받는다.
 
     공통 채널이 둘 이상이고 같은 종류(면 · 선)여야 잰다. 면: 1D = X · Z 단면 점수의 평균, 2D = 칸,
-    점수 = `W_1D`·1D + `W_2D`·2D(있는 쪽만). 선: 측정 순서 곡선 하나. 두 기록이 같은 채널 집합이고 같은
+    측정 순서 = 경로 칸(`dp`), 점수 = `W_1D`·1D + `W_2D`·2D + `W_SEQ`·측정 순서(있는 쪽만, SL-CLU-11).
+    선: 측정 순서 곡선 하나. 두 기록이 같은 채널 집합이고 같은
     기준선을 뺐을 때만 준비한 편차를 쓴다 — 아니면 공통 채널만으로 편차를 다시 내고 기준선은 빼지 않는다
     (채널 평균이 채널 집합에 따라 달라지고, 기준선은 한 채널 집합의 것이다).
     """
@@ -488,18 +499,19 @@ def skew_similarity(a: Mapping, b: Mapping) -> Optional[dict]:
         return _skew_pack(_skew_dev(p["norm"], keys, m), len(keys))
     s = {m: _skew_score(packed(pa, m), packed(pb, m), len(keys), _SEQ_MIN[m]) for m in _SKEW_MATS[pa["kind"]]}
     if pa["kind"] == "area":
-        s1, s2 = _mean((s["x"], s["z"])), s["grid"]
+        s1, s2, sp = _mean((s["x"], s["z"])), s["grid"], s["path"]
     else:
-        s1, s2 = s["path"], None
-    have = [(w, v) for w, v in ((W_1D, s1), (W_2D, s2)) if v is not None]
+        s1, s2, sp = s["path"], None, None
+    have = [(w, v) for w, v in ((W_1D, s1), (W_2D, s2), (W_SEQ, sp)) if v is not None]
     if not have:
         return None
     return {"score": sum(w * v for w, v in have) / sum(w for w, _ in have), "d1": s1, "d2": s2,
-            "dx": s.get("x"), "dz": s.get("z"), "channels": keys}
+            "dx": s.get("x"), "dz": s.get("z"), "dp": sp if pa["kind"] == "area" else None, "channels": keys}
 
 
 def skew_profiles(features: Mapping, baseline: Optional[Mapping] = None, *, grid: bool = False) -> dict:
-    """겹쳐 그리기용 채널 간 편차 — 채널마다 `{"x", "z"}`(+ `grid=True` 면 `"grid"`) 또는 `{"line"}`.
+    """겹쳐 그리기용 채널 간 편차 — 면: 채널마다 `{"x", "z", "line"}`(+ `grid=True` 면 `"grid"`; `line` =
+    측정 순서 곡선, SL-CLU-11), 선: `{"line"}`.
 
     값은 각 채널 표준편차 단위의 「채널 평균에서 벗어난 정도」라 채널끼리 한 자로 그린다. `baseline` 이
     이 기록의 종류 · 채널 집합과 맞으면 그것을 뺀 값(묶음이 본 그대로). 소수 셋째 자리, 빈 자리는 None.
@@ -509,8 +521,8 @@ def skew_profiles(features: Mapping, baseline: Optional[Mapping] = None, *, grid
     keys = sorted(norm)
     if not kind or len(keys) < 2:
         return {}
-    base = baseline if baseline and baseline["kind"] == kind and baseline["keys"] == keys else None
-    mats = ("path",) if kind == "line" else ("x", "z", "grid") if grid else ("x", "z")
+    base = baseline if _base_fits(baseline, kind, keys) else None
+    mats = ("path",) if kind == "line" else ("x", "z", "path", "grid") if grid else ("x", "z", "path")
     out: dict[str, dict] = {k: {} for k in keys}
     nch = len(keys)
     for m in mats:
@@ -530,7 +542,12 @@ def skew_profiles(features: Mapping, baseline: Optional[Mapping] = None, *, grid
 #   amp   — 채널마다 log(표준편차) − 범위의 중앙값: 진폭(크기)이 평소와 다른 정도
 # 몫(`PCA_W`)은 값 하나당 RMS 로 맞춘다 — 범위가 고르면 벗어남도 작게 남는다(범위마다 다시 키우지 않는다).
 
-_PCA_MATS = {"area": ("x", "z", "grid"), "line": ("path",)}
+_PCA_MATS = {"area": ("x", "z", "grid", "path"), "line": ("path",)}
+
+
+def _model_mats(model: Mapping) -> tuple[str, ...]:
+    """투영식이 쓴 재료 — 저장된 순서대로. SL-CLU-11 전에 저장된 면 스캔 투영식은 측정 순서 곡선이 없다."""
+    return tuple(b["mat"] for b in model["layout"] if b["part"] == "shape")
 
 
 def _down_grid(g: list) -> list[Optional[float]]:
@@ -553,20 +570,28 @@ def _down(seq: list, n: int) -> list[Optional[float]]:
     return out
 
 
-def _pca_raw(features: Mapping) -> Optional[tuple[str, tuple[str, ...], list[tuple[str, str, list]]]]:
-    """기록 하나의 재료 — (종류, 채널들, [(part, mat, 값들)]). 값은 채널 순(이름 순)으로 이어 붙인다."""
+def _pca_raw(features: Mapping, mats: Optional[tuple[str, ...]] = None
+             ) -> Optional[tuple[str, tuple[str, ...], list[tuple[str, str, list]]]]:
+    """기록 하나의 재료 — (종류, 채널들, [(part, mat, 값들)]). 값은 채널 순(이름 순)으로 이어 붙인다.
+
+    `mats` 를 주면(저장된 투영식의 재료) 그 재료만 그 순서로. 측정 순서 곡선은 늘 `PCA_PATH` 칸 — 점이 모자라
+    더 짧으면 빈 자리(평소)로 채운다.
+    """
     kind, norm = _skew_norm(features)
     if kind is None:
         return None
     keys = tuple(sorted(norm))
     chans = features.get("channels") or {}
+    use = [m for m in (mats or _PCA_MATS[kind]) if m in _PCA_MATS[kind]]
     blocks: list[tuple[str, str, list]] = []
     seqs: dict[str, list[list]] = {}
-    for m in _PCA_MATS[kind]:
-        seqs[m] = [(_down_grid(norm[k]["grid"]) if m == "grid" else
-                    _down(norm[k]["path"], PCA_PATH) if m == "path" else norm[k][m]) for k in keys]
+    for m in use:
+        if m == "path":
+            seqs[m] = [(_down(norm[k]["path"], PCA_PATH) + [None] * PCA_PATH)[:PCA_PATH] for k in keys]
+        else:
+            seqs[m] = [_down_grid(norm[k]["grid"]) if m == "grid" else norm[k][m] for k in keys]
         blocks.append(("shape", m, [v for s in seqs[m] for v in s]))
-    for m in _PCA_MATS[kind]:
+    for m in use:
         dev: list[list[Optional[float]]] = [[None] * len(seqs[m][0]) for _ in keys]
         for j in range(len(seqs[m][0])):
             vals = [s[j] for s in seqs[m]]
@@ -716,7 +741,7 @@ def pca_model(features_list: Iterable[Mapping]) -> Optional[dict]:
 
 def pca_coords(model: Mapping, features: Mapping) -> Optional[list[float]]:
     """기록 하나의 주성분 좌표. 종류 · 채널 집합이 투영식과 다르면 None."""
-    raw = _pca_raw(features)
+    raw = _pca_raw(features, _model_mats(model))
     if raw is None or raw[0] != model["kind"] or list(raw[1]) != model["keys"]:
         return None
     x = [r - m for r, m in zip(_pca_resid(model, raw[2]), model["mean"])]
@@ -758,8 +783,8 @@ def _shares(model: Mapping, vec: list[float]) -> list[dict]:
 def pca_axes(model: Mapping, n: int = 2) -> dict:
     """지도의 축 읽기 — 축마다 설명하는 분산의 몫, (재료, 채널)별 무게의 몫, 1D 재료의 무게 곡선.
 
-    무게(loading)가 큰 자리일수록 그 축을 따라 기록이 갈린다. 곡선은 X · Z 단면(면) 또는 측정 순서
-    곡선(선)만 — 칸은 몫에만 넣는다.
+    무게(loading)가 큰 자리일수록 그 축을 따라 기록이 갈린다. 곡선은 X · Z 단면과 측정 순서 곡선(면,
+    SL-CLU-11) 또는 측정 순서 곡선(선)만 — 칸은 몫에만 넣는다.
     """
     total = model.get("total") or 0.0
     axes = []
@@ -779,7 +804,7 @@ def pca_axes(model: Mapping, n: int = 2) -> dict:
 
 def pca_parts(model: Mapping, features: Mapping) -> Optional[dict]:
     """기록 하나가 범위의 평소와 어디서 다른가 — 벗어남(값 하나당 RMS)과 (재료, 채널)별 몫."""
-    raw = _pca_raw(features)
+    raw = _pca_raw(features, _model_mats(model))
     if raw is None or raw[0] != model["kind"] or list(raw[1]) != model["keys"]:
         return None
     vec = _pca_resid(model, raw[2])

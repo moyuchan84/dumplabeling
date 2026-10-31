@@ -20,7 +20,7 @@ into `connectors/` or `data/`.
 - They take a `Store` / `Fleet` as arguments — nothing here constructs a connection, so a test hands in a fake.
 
 ### `api.py` — `create_app(dsn, fleet_url)`
-- Routes: `/health` · `/label-defs` · `/labels` (+ `/labels/similar`, `/labels/by-case/{id}`) · `/clusters` (+
+- Routes: `/health` · `/guide` (the reader's guide, `SL-DOC-1`) · `/label-defs` · `/labels` (+ `/labels/similar`, `/labels/by-case/{id}`) · `/clusters` (+
   `/run`, `/map`, `/{no}/apply`) · `/records/{id}`. The caller contract is `README.api.md`; change a route, its
   response or an error there in the same change.
 - Error promise: `ValueError` → 422 · `KeyError` → 404 · `NotCached` → 422 · `FleetUnavailable` → 502 ·

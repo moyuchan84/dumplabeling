@@ -148,9 +148,10 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
 라벨이 있든 없든 scanlabel 이 **본 기록 전부**(기록 풀)를 **채널 간 편차(skew)** 로 묶습니다. **같은 스캔 종류 · 같은 척 ·
 같은 센서**(`scan_enum` + `chuck_id` + `sensor_id`)끼리만 묶고, 구성원 모두가 묶음의 **대표 기록**과 직접 0.8 이상 닮았습니다.
 
-채널 간 편차 = 같은 자리(16×16 칸 · X 단면 · Z 단면, 선 스캔은 측정 순서 곡선)에서 채널(`value` 의 키 — tr · txh · tyh …)마다
+채널 간 편차 = 같은 자리(16×16 칸 · X 단면 · Z 단면 · 측정 순서 128칸, 선 스캔은 측정 순서 곡선)에서 채널(`value` 의 키 — tr · txh · tyh …)마다
 「제 표준편차로 잰 값 − 채널 평균」입니다. 그 범위의 기록들이 **평소 어긋나는 만큼**(자리마다 중앙값, 기준선)을 빼고, 남은
-어긋남의 자리 · 방향 · 크기가 같을수록 1 에 가깝습니다. 채널이 둘 미만인 기록은 묶이지 않습니다. 라벨 제안
+어긋남의 자리 · 방향 · 크기가 같을수록 1 에 가깝습니다. 면 스캔 점수 = 단면 · 칸 · 측정 순서를 1/3 씩(SL-CLU-11 —
+측정 순서의 가로는 원래 인덱스가 아니라 스캔 진행률: 기록마다 점 개수가 달라서). 채널이 둘 미만인 기록은 묶이지 않습니다. 라벨 제안
 (`/labels/similar`)은 지금처럼 모양 유사도입니다. 3건보다 작은 무리는 「묶이지 않음」입니다.
 분류(`category`)는 그 묶음의 **라벨된 구성원**이 합의한 가장 깊은 단계입니다(60% 이상 + 2위보다 많음 + 위 단계의
 자식) — 라벨된 구성원이 없거나 갈리면 `null`. 이 판단도 서버가 하고, 화면은 옮겨 적습니다.
@@ -173,7 +174,7 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
       "representative": { "record_id": 12, "servername": "scanner-a", "server_id": 1, "name": "…",
                           "source": "…", "sig": "…", "scan_enum": "…", "meta": { … } },
       "channel": "A", "profile": { "x": [ … 16개 ], "z": [ … 16개 ] },
-      "skew": { "tr": { "x": [ … 16개 ], "z": [ … 16개 ] }, "txh": { … }, "tyh": { … } },
+      "skew": { "tr": { "x": [ … 16개 ], "z": [ … 16개 ], "line": [ … 128개 ] }, "txh": { … }, "tyh": { … } },
       "labelled": 6, "unlabelled": 52,
       "levels": { "1": [ { "label_id": 1, "path": "신호 이상", "count": 6, "share": 1.0, "case_id": null, "agreed": true } ], "2": [ … ], "3": [ … ] },
       "category": { "label_id": 3, "level": 3, "path": "…", "count": 5, "share": 0.833, "case_id": 1, "agreed": true } } ] }
@@ -226,8 +227,8 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
                       "amp": { "tr": 0.12, "txh": -0.4, "tyh": 0.03 } }, { "axis": 2, … } ] }
 ```
 
-- `parts` = 그 축의 무게를 (재료 `shape` · `skew` · `amp`, 채널)로 나눈 몫, 큰 것부터. `loadings` = 1D 재료(면: X · Z 단면,
-  선: `line`)의 무게 곡선 — 큰 자리일수록 그 축을 따라 기록이 갈린다. 칸은 몫에만 들어갑니다.
+- `parts` = 그 축의 무게를 (재료 `shape` · `skew` · `amp`, 채널)로 나눈 몫, 큰 것부터. `loadings` = 1D 재료(면: X · Z 단면과
+  측정 순서 `line`, 선: `line`)의 무게 곡선 — 큰 자리일수록 그 축을 따라 기록이 갈린다. 칸은 몫에만 들어갑니다.
 
 - 점 = `id`(풀의 기록 id — `GET /records/{id}`) · 자리 · `c` 묶음 번호(묶이지 않음 = `null`) · `l` 라벨 있음.
 - `target.in_run: false` = 이번 묶음 뒤에 본 기록이거나 상한에 걸려 빠진 기록 — 같은 투영식으로 놓았고 묶음 번호는 없다.
@@ -249,9 +250,9 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
   "meta": { … }, "seen_at": "…", "labels": [ … ], "cluster_no": 2, "run_id": 4, "method": "skew",
   "chuck_id": "CH1", "sensor_id": "2", "pca": null,
   "profiles": { "A": { "x": [ … 16개 ], "z": [ … 16개 ], "grid": [ … 256개 ] } },
-  "skew": { "A": { "x": [ … 16개 ], "z": [ … 16개 ] }, "B": { … } },
+  "skew": { "A": { "x": [ … 16개 ], "z": [ … 16개 ], "line": [ … 128개 ] }, "B": { … } },
   "vs": { "similarity": { "score": 0.88, "d1": 0.85, "d2": 0.9, "scale": 1.3, "by_channel": { … } },
-          "skew_similarity": { "score": 0.83, "d1": 0.8, "d2": 0.86, "dx": 0.78, "dz": 0.82, "channels": [ "A", "B" ] },
+          "skew_similarity": { "score": 0.83, "d1": 0.8, "d2": 0.86, "dx": 0.78, "dz": 0.82, "dp": 0.71, "channels": [ "A", "B" ] },
           "pca_similarity": null,
           "profiles": { "A": { "x": [ … ], "z": [ … ], "grid": [ … ] } },
           "skew": { "A": { "x": [ … ], "z": [ … ] }, "B": { … } } } }
@@ -291,6 +292,15 @@ RMS) · 어디서(`parts`, (재료, 채널)별 몫) 다른지, `vs.pca_similarit
 - 풀에 저장된 특징을 그대로 씁니다 — fleet 을 부르지 않습니다.
 - `run_id` 가 `method` 잣대의 최신 결과와 다르면 422 — 다른 사람이 다시 묶은 뒤의 번호로 엉뚱한 기록에 붙이지 않게.
   화면이 본 결과의 잣대를 그대로 보냅니다(기본 `skew`).
+
+- `skew_similarity` 의 `d1` = 단면(`dx` · `dz` 평균) · `d2` = 칸 · `dp` = 측정 순서(면 스캔만, 선 스캔은 `null`) 점수 —
+  `score` 는 이 셋의 가중 평균입니다. `skew` 의 `line` = 측정 순서 곡선의 채널 간 편차(면 스캔은 `x` · `z` 옆에, 선 스캔은 이것만).
+
+## `GET /guide` — 묶음 화면 읽는 법
+
+리뷰하는 사람용 HTML 문서(SL-DOC-1). 어떤 데이터를 가져와서 어떤 순서로 묶음이라는 결론이 나는지, 기록 상세의 그림 하나하나가
+무엇이고 점수에 쓰이는지를 설명합니다. 문턱 · 가중치는 요청할 때 지금 상수로 채웁니다. 절마다 고정 앵커가 있어
+(`#flow` · `#data` · `#materials` · `#skew` · `#pca` · `#cluster` · `#map` · `#detail` · `#path` · `#faq`) 화면이 그 절로 바로 겁니다.
 
 ## `GET /health`
 

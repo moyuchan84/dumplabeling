@@ -27,6 +27,8 @@ needs a stored fact, the caller passes it in (`Tree`, `candidates`, `member_labe
 - Inter-channel skew — the clusters' and the map's measure (`SL-CLU-9`): `skew_baseline` (the group's per-slot median
   deviation) · `prepare_skew` (each channel scaled by its own point stats, the deviation from the channel mean at each
   slot, minus the baseline, packed for `math.sumprod`) · `skew_similarity` · `skew_profiles` (what the screen draws).
+  Area-scan materials: X · Z profiles, cells and the scan-order curve (`SL-CLU-11`, weight `W_SEQ`); `_base_fits` /
+  `_model_mats` keep baselines and PCA models stored before the curve readable.
   Grouping: `group_of` / `group_key` — (scan kind, chuck, sensor).
 - Reading scores: `rank` (per-level ranking with the tree roll-up, the "sure" levels) · `similar_cases` ·
   `cluster` (representative-seeded grouping) · `cluster_category` · `cluster_map` / `project` /

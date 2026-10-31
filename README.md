@@ -61,7 +61,9 @@ VS Code 에서는 워크스페이스의 `scanlabel API (8100)` 구성(또는 com
 묶기는 (스캔 종류, 센서)마다 따로 하고, 그 범위마다 최근 기록 `CLUSTER_MAX_N`(800)개까지입니다 — 모든 쌍을 비교하므로(800개에 약 6초) 상한이
 있고, 넘친 수는 결과에 `truncated` 로 나옵니다.
 
-묶는 기준 · 다시 묶기 흐름 · 묶음 지도 화면이 그리는 조건 · 묶이지 않는 경우는 [`docs/cluster-logic.html`](docs/cluster-logic.html) 에 그림과 함께 정리했습니다(브라우저로 엽니다).
+묶는 기준 · 다시 묶기 흐름 · 묶음 지도 화면이 그리는 조건 · 묶이지 않는 경우는 [`docs/cluster-logic.html`](docs/cluster-logic.html) 에 그림과 함께 정리했습니다(브라우저로 엽니다 — 코드 흐름 기준, 개발자용).
+화면을 **읽는 사람**용 안내는 서버가 직접 내줍니다: `GET /guide`(화면의 「이 화면 읽는 법 ↗」). 원문은
+[`scanlabel/application/guide.html`](scanlabel/application/guide.html) 이고, 문서 속 숫자는 지금 상수로 채워집니다.
 
 ## 측정
 

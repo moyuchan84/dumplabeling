@@ -7,13 +7,14 @@ ValueError → 422 · KeyError → 404 · NotCached → 422 · FleetUnavailable 
 from __future__ import annotations
 
 import os
+import pathlib
 import threading
 from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from .. import timebase
@@ -22,6 +23,29 @@ from ..data.repository import Store
 from ..processing import shape
 from ..processing.tree import check_selection
 from .usecases import pool_rows, run_clusters
+
+
+_GUIDE = pathlib.Path(__file__).with_name("guide.html")
+
+
+def guide_values() -> dict[str, str]:
+    """읽는 법(`guide.html`)의 {{이름}} 자리 — 지금 쓰는 `shape` 상수. 문서의 숫자가 코드와 갈라지지 않게."""
+    pct = lambda x: f"{round(x * 100):d}"
+    area = shape.PCA_MAT_W["area"]
+    vals = {n: getattr(shape, n) for n in (
+        "GRID_N", "PATH_N", "CLUSTER_MIN", "CLUSTER_MIN_SIZE", "CLUSTER_MAX_N", "SKEW_FLOOR",
+        "W_1D", "W_2D", "W_SEQ", "PCA_PATH", "PCA_MAX_K", "MAP_LANDMARKS")}
+    vals.update(CLUSTER_AGREE_PCT=pct(shape.CLUSTER_AGREE), PCA_VAR_PCT=pct(shape.PCA_VAR),
+                PCA_W_SHAPE=shape.PCA_W["shape"], PCA_W_SKEW=shape.PCA_W["skew"], PCA_W_AMP=shape.PCA_W["amp"],
+                PCA_MAT_X=area["x"], PCA_MAT_Z=area["z"], PCA_MAT_GRID=area["grid"], PCA_MAT_PATH=area["path"])
+    return {k: str(v) for k, v in vals.items()}
+
+
+def render_guide() -> str:
+    html = _GUIDE.read_text(encoding="utf-8")
+    for k, v in guide_values().items():
+        html = html.replace("{{" + k + "}}", v)
+    return html
 
 
 class LabelIn(BaseModel):
@@ -92,7 +116,7 @@ def _skew_out(sim: Optional[dict]) -> Optional[dict]:
     if sim is None:
         return None
     return {"score": _r(sim["score"]), "d1": _r(sim["d1"]), "d2": _r(sim["d2"]),
-            "dx": _r(sim["dx"]), "dz": _r(sim["dz"]), "channels": sim["channels"]}
+            "dx": _r(sim["dx"]), "dz": _r(sim["dz"]), "dp": _r(sim.get("dp")), "channels": sim["channels"]}
 
 
 def _level_out(entries: list[dict]) -> list[dict]:
@@ -164,6 +188,11 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
 
     # NotCached 는 ValueError 의 하위라 422 로 간다 — 따로 적을 것이 없다.
     _ = NotCached
+
+    @app.get("/guide", response_class=HTMLResponse)
+    def guide():
+        """「묶음」 탭 읽는 법 — 리뷰하는 사람용 문서. 숫자는 지금 상수로 채운다 (SL-DOC-1)."""
+        return HTMLResponse(render_guide())
 
     @app.get("/health")
     def health():

@@ -223,8 +223,9 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 - `SL-CLU-9` **Clusters and the map are measured by inter-channel skew, not by shape** (2026-10-30, the user:
   「value 하위에 있는 key 의 array 간의 skew (tr, txh, tyh 등 같은 index 값들간의 그래프의 편차)가 dump error 의 labeling
   clustering 의 key」 — the skew between the `value` arrays, the spread of tr · txh · tyh at the same index, is what
-  tells dump errors apart). Per record: every channel's materials (area scan: cells, X profile, Z profile; line scan:
-  the scan-order curve — the slots line up across channels because the channels share `xyz`) are scaled by **that
+  tells dump errors apart). Per record: every channel's materials (area scan: cells, X profile, Z profile and, since
+  `SL-CLU-11`, the scan-order curve; line scan: the scan-order curve — the slots line up across channels because the
+  channels share `xyz`) are scaled by **that
   channel's own point mean and std** from the snapshot (`stats`) — a cell mean is linear in the points, so this equals
   scaling each point and then averaging, and needs no source data and no `FEATURE_VERSION` bump. At every slot the
   **deviation** of each channel from the mean over channels is taken (a slot any channel lacks is skipped). The group's
@@ -232,7 +233,8 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   (`skew_baseline`, none under `CLUSTER_MIN_SIZE` records) — is subtracted, leaving what is unusual for this record.
   Two records score `(2·u·v + f) / (|u|² + |v|² + f)` over the slots both have, `f = 2·n·SKEW_FLOOR²` (`SKEW_FLOOR` =
   0.10 channel-std RMS): 1 = same place, direction and size; two records whose channels agree (both under the floor)
-  score near 1; one skewed and one not near 0; opposite near −1. Area: `W_1D`·mean(X, Z) + `W_2D`·cells; line: the curve.
+  score near 1; one skewed and one not near 0; opposite near −1. Area: `W_1D`·mean(X, Z) + `W_2D`·cells + `W_SEQ`·curve
+  (`SL-CLU-11`); line: the curve.
   Fewer than two common channels = no score (the record never joins a cluster; map distance 1). The run stores each
   group's baseline in its projection (`maps`), and the record detail scores and draws against it. Suggestions
   (`SL-SUG`, `rank`) still use shape similarity (`SL-SIM`) — the change is for clustering only.
@@ -256,7 +258,8 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   coordinates, never cluster and have no point: each record becomes one row of three **deviations from the group's
   per-position median** — `shape` (each channel's own-std-scaled materials), `skew` (the per-slot inter-channel
   deviation of `SL-CLU-9`) and `amp` (each channel's log std) — weighted `PCA_W` (0.4 · 0.4 · 0.2; area materials
-  `PCA_MAT_W` X 0.25 · Z 0.25 · cells 0.5, cells reduced to `PCA_GRID` 8×8, the line curve to `PCA_PATH` 64) and scaled
+  `PCA_MAT_W` X 0.2 · Z 0.2 · cells 0.3 · scan-order curve 0.3 since `SL-CLU-11`, cells reduced to `PCA_GRID` 8×8, the
+  curve to `PCA_PATH` 64) and scaled
   to RMS per value. Components are kept until `PCA_VAR` (0.90) of the variance is explained (at least two, at most
   `PCA_MAX_K` 10), by subspace iteration + Rayleigh–Ritz in the standard library — deterministic, sign fixed by the
   largest loading. Two records score `(2·u·v + f) / (|u|² + |v|² + f)` on their coordinates, `f = 2·PCA_FLOOR²`
@@ -271,6 +274,49 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   Note: amplitude is one of the materials, so a group whose records differ mostly in gain splits by gain under `pca`
   (it does not under `skew`). Not yet: the measures have not been compared on real tr/txh/tyh records — the API
   default stays `skew` until they are.
+
+- `SL-CLU-11` **An area scan's skew also reads the scan-order curve** (2026-10-31, the user, asking why the data
+  「경로겹쳐보기에서 사용되는 인덱스 - 값」 — the index → value series of the dashboard's path overlay — is neither
+  clustered, put through PCA nor plotted in the record detail: 「그방법도 검토해서 반영해주고」). The 128-slot scan-order
+  curve the snapshot already keeps (`SL-FEAT-1`; no `FEATURE_VERSION` bump) becomes a fourth skew material for area
+  scans and a fourth PCA material (`_SKEW_MATS` · `_PCA_MATS`). Its axis is **scan progress** (slot j = the j-th 1/128 of
+  the record's points), not the raw index: within one group the point count differs between records (local pool
+  2026-10-31: 9–78 distinct counts per group, e.g. 420 vs 480 points), so raw index i is a different place in two
+  records, while **within** a record every channel's index i is the same point (all 5,044 pooled records: one point
+  count across their channels). Why it is not `SL-SIM-1`'s rejected curve: bin-averaging mixes row turns into a slot,
+  which smears **one channel's shape**, but the same points fall into the slot for every channel, so the **deviation
+  between channels** survives. What it adds: the cells and profiles fold every visit to a place into one slot — a
+  HORVERT scan walks the area twice (horizontal raster, then vertical), so a skew in only one pass looked the same
+  wherever it happened; the curve tells which pass, i.e. **when** in the scan the channels parted. Weight `W_SEQ` 0.5
+  (cross-section · cells · curve one third each); the record detail returns the curve's skew as `line` beside `x` · `z`
+  and its score as `dp`. Old stored baselines and PCA models (no curve) still read: a baseline lacking a material is not
+  subtracted (`_base_fits`), a model projects with the materials it was built from (`_model_mats`); 「다시 묶기」 stores
+  new ones.
+  [test: "test_an_area_scans_skew_also_reads_the_scan_order_curve" · "test_a_stored_baseline_or_model_without_the_scan_order_curve_still_reads"]
+  Rejected: comparing the raw index → value series across records (the point counts differ, see above); `W_SEQ` 0.25 —
+  then a pair whose cells and profiles agree can never fall below `CLUSTER_MIN` on the curve alone, so two records
+  that skewed in different passes still merge (the HORVERT test fails); shape similarity (`rank`) on the curve
+  (`SL-SIM-1` stands — the curve stays out of label suggestions).
+  Validation (local pool, 5,044 records, 714 labels, demo channels `A`/`B` — **not** real tr/txh/tyh data; measured
+  in memory, nothing stored): skew — clusters 89 → 295, unclustered 177 → 197, purity L1/L2/L3 0.993/0.985/0.873 →
+  1.0/0.999/0.913, coverage 0.964 → 0.955 (`W_SEQ` 0.25: 216 · 208 · L3 0.921 · 0.945); pca — clusters 57 → 100,
+  unclustered 25 → 48, purity unchanged (0.985/0.985/1.0), coverage 0.999 → 0.994, model + clustering 46 s → 105 s
+  (curve weight 0.15: 76 clusters); skew-vs-pca adjusted Rand 0.716 → 0.552. The finer split is the curve telling apart
+  records whose skew sits in different parts of the scan; whether that is the right granularity can only be judged on
+  real tr/txh/tyh labels. Revisit when they are labelled: tune `W_SEQ` and the PCA curve weight there.
+
+## Docs for readers (SL-DOC)
+
+- `SL-DOC-1` **The service that judges also explains** (2026-10-31, the user: 「해당 데이터를 보고 리뷰하는사람들이 해당
+  그래프 데이터를 보면 이해가 안되는데 어떤 방식 접근, 어떤 데이터들을 가져와서 해당 결론에 도출하는지 쉽고 이해할수
+  있게 가이드 하는 문서도 해당 메뉴 링크에 있으면 좋을거같아」 — reviewers cannot follow the graphs; a guide to the
+  approach, the data and how a conclusion is reached should hang off that menu). `GET /guide` serves
+  `application/guide.html` — Korean, for reviewers: what is read from a dump record, the three summaries, both
+  measures, the grouping, the map, and every block of the record detail with whether it feeds a score. Every threshold
+  and weight in it is a `{{NAME}}` filled from `shape` at request time (`api.guide_values`), so the page cannot quote a
+  stale number. Sections carry stable anchors (`#skew` · `#pca` · `#path` · `#detail` …) that poc_viewer links to
+  (`DUMP-CLU-18`). [test: "test_the_guide_is_served_with_the_numbers_the_code_uses"]
+  `docs/cluster-logic.html` stays the developer's walk through the code (request flow, tables), not the reader's guide.
 
 ## Cluster map (SL-MAP)
 

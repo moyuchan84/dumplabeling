@@ -5,6 +5,7 @@ from pathlib import Path
 
 from scanlabel.application.usecases import run_eval, seed_labels
 from scanlabel.data.repository import Store
+from scanlabel.processing import shape
 
 from . import synth
 
@@ -210,3 +211,13 @@ def test_eval_reports_per_level_hit_rates(client, dsn, fleet):
     assert res["labelled"] == 4
     assert res["levels"][2]["n"] == 4 and res["levels"][2]["top1"] == 4
     assert res["levels"][3]["top1"] == 4
+
+
+def test_the_guide_is_served_with_the_numbers_the_code_uses(client):
+    # 읽는 법은 판단을 내린 쪽이 내주고, 숫자는 지금 상수로 채운다 — 문서가 코드와 갈라지지 않게 (SL-DOC-1)
+    r = client.get("/guide")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
+    assert "{{" not in r.text and "}}" not in r.text
+    assert f"{shape.GRID_N}×{shape.GRID_N}" in r.text and f"{shape.CLUSTER_MIN} 이상" in r.text
+    for anchor in ("skew", "pca", "path", "detail"):          # 화면이 절로 바로 건다 (poc_viewer DUMP-CLU-18)
+        assert f'id="{anchor}"' in r.text

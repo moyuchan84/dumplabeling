@@ -305,6 +305,67 @@ def test_skew_needs_two_common_channels_and_uses_only_the_common_ones():
     assert abs(sum(prof[k]["x"][-1] for k in prof)) < 0.01     # 자리마다 채널 편차의 합은 0 — 채널 평균에서 잰다
 
 
+def horvert(pass_dev, *, cols=24, rows=16, gain=1.0):
+    """HORVERT 처럼 같은 면을 두 번 지나는 스캔 — 가로 raster 한 번, 세로 raster 한 번. txh 는 `pass_dev[p]`
+    만큼(p = 0 가로, 1 세로) 오른쪽 절반에서 어긋난다. 칸 · 단면에서는 두 번 지난 점이 한 칸에 섞인다."""
+    xs, zs, tr, txh, tyh = [], [], [], [], []
+    walk = ([(c, r, 0) for r in range(rows) for c in range(cols)]
+            + [(c, r, 1) for c in range(cols) for r in range(rows)])
+    for c, r, p in walk:
+        x, z = c / (cols - 1), r / (rows - 1)
+        base = x + 0.5 * z
+        xs.append(x * 10.0)
+        zs.append(z * 4.0)
+        tr.append(gain * base)
+        txh.append(3.0 * gain * (base + (pass_dev[p] if x > 0.5 else 0.0)) + 100.0)
+        tyh.append(-0.2 * gain * base)
+    return shape.record_features({"value": {"tr": tr, "txh": txh, "tyh": tyh}, "xyz": {"x": xs, "z": zs}})
+
+
+def test_an_area_scans_skew_also_reads_the_scan_order_curve():
+    # 가로에서만 어긋난 기록과 세로에서만 어긋난 기록은 같은 칸에 같은 만큼 어긋난다 — 칸 · 단면으로는 못 가른다.
+    # 측정 순서 곡선에서는 어긋나는 때가 앞 절반 · 뒤 절반으로 갈린다 (SL-CLU-11).
+    recs = ([horvert((0.0, 0.0), gain=1.0 + 0.02 * i) for i in range(5)]
+            + [horvert((0.4, 0.0), gain=1.0 + 0.02 * i) for i in range(3)]
+            + [horvert((0.0, 0.4), gain=1.0 + 0.02 * i) for i in range(3)])  # 주성분은 진폭도 재료 — gain 은 거의 같게
+    base = shape.skew_baseline(recs)
+    assert len(base["mats"]["path"]) == 3 * shape.PATH_N
+    p = [shape.prepare_skew(f, base) for f in recs]
+    h_v = shape.skew_similarity(p[5], p[8])
+    assert h_v["d2"] > 0.9 and h_v["d1"] > 0.9                     # 칸 · 단면은 같다고 본다
+    assert h_v["dp"] < 0.3 and h_v["score"] < shape.CLUSTER_MIN    # 측정 순서가 가른다
+    assert shape.skew_similarity(p[5], p[6])["score"] > 0.9
+    prof = shape.skew_profiles(recs[5], base)
+    assert len(prof["txh"]["line"]) == shape.PATH_N and len(prof["txh"]["x"]) == shape.GRID_N
+    items = [{"id": i, "features": f, "scan_enum": "S"} for i, f in enumerate(recs, start=1)]
+    for method in shape.METHODS:
+        out = shape.cluster(items, method)
+        assert sorted(sorted(m["id"] for m in c["members"]) for c in out["clusters"]) == \
+            [[1, 2, 3, 4, 5], [6, 7, 8], [9, 10, 11]], method
+
+
+def test_a_stored_baseline_or_model_without_the_scan_order_curve_still_reads():
+    # SL-CLU-11 전에 저장된 기준선 · 투영식(면 스캔에 측정 순서 곡선이 없다)도 다시 묶기 전까지 읽힌다
+    recs = [f for _, f in pca_scope()]
+    base = shape.skew_baseline(recs)
+    old = {**base, "mats": {m: v for m, v in base["mats"].items() if m != "path"}}
+    assert shape.prepare_skew(recs[5], old)["centred"] is False
+    assert shape.skew_profiles(recs[5], old)["txh"]["x"] == shape.skew_profiles(recs[5])["txh"]["x"]
+    model = shape.pca_model(recs)
+    keep = [i for i, b in enumerate(model["layout"]) if b["mat"] != "path"]
+    pos, cols = 0, []
+    for b in model["layout"]:
+        if b["mat"] != "path":
+            cols += range(pos, pos + b["len"])
+        pos += b["len"]
+    legacy = {**model, "layout": [model["layout"][i] for i in keep], "factor": [model["factor"][i] for i in keep],
+              "median": [model["median"][i] for i in cols], "mean": [model["mean"][i] for i in cols],
+              "components": [[c[i] for i in cols] for c in model["components"]]}
+    c = shape.pca_coords(legacy, recs[5])
+    assert c is not None and len(c) == len(model["components"])
+    assert shape.pca_parts(legacy, recs[5])["distance"] > 0
+
+
 def test_prepared_skew_scores_exactly_like_raw_snapshots():
     a, b = skewed(lambda x, z: 0.3 * x), skewed(lambda x, z: 0.2 * x * x, gain=2.0)
     raw = shape.skew_similarity(a, b)
