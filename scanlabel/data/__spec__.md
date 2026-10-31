@@ -15,7 +15,7 @@ never `connectors` (a stored row does not know where it came from) and never `ap
 | `scan_labels` | one labelled record: label ids + feature snapshot + meta copy (`SL-LBL`) | `PUT /labels`, cluster apply | empty selection deletes the row |
 | `scan_records` | the record pool — every record seen, labelled or not (`SL-POOL`) | opening a file, labelling, `jobs index`, `jobs refeature` | not deleted |
 | `index_cursors` | where `jobs index` stopped in fleet's `/generations` | `jobs index` | not deleted |
-| `cluster_runs` · `cluster_members` · `cluster_points` · `cluster_maps` | the latest cluster run per set and measure (`method`: `skew` · `pca`, `SL-CLU-10`), its members, 2D map positions and one map projection per group (`SL-CLU` · `SL-MAP`) | `POST /clusters/run`, `jobs cluster` | replaced by the next run of the same measure |
+| `cluster_runs` · `cluster_members` · `cluster_points` · `cluster_maps` | the latest cluster run per set and measure (`method`: `skew` · `pca`, `SL-CLU-10`), its members, 2D map positions and one map projection per group (`SL-CLU` · `SL-MAP`); the run keeps `next_no` and `changes` vs the run before (`SL-CLU-13`, `0008`) | `POST /clusters/run`, `jobs cluster` | replaced by the next run of the same measure, which carries it forward (`Store.carry_of`) |
 | `schema_migrations` | the migration ledger | `migrate.py` | never |
 
 A case link (`label_defs.case_id`) is a **soft** reference to fleet's `acs_case` — scanlabel never joins

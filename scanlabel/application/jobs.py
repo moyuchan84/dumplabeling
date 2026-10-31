@@ -57,6 +57,8 @@ def _main(argv: Optional[list[str]] = None) -> int:
     p = sub.add_parser("cluster", help="기록 풀을 다시 묶기 — 채널 간 편차 · 주성분 두 잣대 (라벨로 잰 순도 · 일치도)")
     p.add_argument("--set-name", default="dump")
     p.add_argument("--method", choices=("all", "skew", "pca"), default="all", help="묶을 잣대 (기본: 둘 다)")
+    p.add_argument("--fresh", action="store_true",
+                   help="지난 판을 이어받지 않고 처음부터 묶는다 (문턱 · 재료를 바꾼 뒤, SL-CLU-13)")
     args = ap.parse_args(argv)
 
     dsn = args.dsn or os.environ.get("SCANLABEL_DB_DSN", "")
@@ -72,7 +74,7 @@ def _main(argv: Optional[list[str]] = None) -> int:
             print(json.dumps(res, ensure_ascii=False, indent=2)) if args.json else _print_eval(res)
         elif args.cmd == "cluster":
             methods = shape.METHODS if args.method == "all" else (args.method,)
-            print(json.dumps(run_clusters(store, set_name=args.set_name, methods=methods),
+            print(json.dumps(run_clusters(store, set_name=args.set_name, methods=methods, fresh=args.fresh),
                              ensure_ascii=False, indent=2))
         else:
             fleet = Fleet(args.fleet_url)

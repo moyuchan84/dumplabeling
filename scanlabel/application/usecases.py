@@ -157,8 +157,12 @@ def index(store: Store, fleet: Fleet, *, set_name: str, page: int = 500,
     return {"files": files, "records": records, "skipped": skipped, "cursor": after}
 
 
-def run_clusters(store: Store, *, set_name: str, methods: Iterable[str] = shape.METHODS) -> dict:
+def run_clusters(store: Store, *, set_name: str, methods: Iterable[str] = shape.METHODS,
+                 fresh: bool = False) -> dict:
     """풀 전체를 잣대마다 다시 묶어 저장한다 (SL-CLU-1 · SL-CLU-10). 반환 = 잣대별 요약 + 라벨로 잰 숫자.
+
+    잣대마다 지난 판을 **이어서** 묶는다(SL-CLU-13) — 닮음이 그대로인 기록은 같은 번호에 남는다. `fresh` 면
+    지난 판을 보지 않고 처음부터(번호는 그래도 쓴 적 없는 것부터) — 문턱 · 재료를 바꾼 뒤 일부러 다시 짤 때.
 
     풀은 한 번만 읽는다 — 두 잣대가 같은 기록을 묶는다. 주성분 투영식은 범위마다 한 번 내서 묶음과
     지도가 함께 쓴다. `quality` 는 라벨된 기록으로 잰 순도 · 덮음(`shape.cluster_quality`), `agreement` 는
@@ -178,7 +182,10 @@ def run_clusters(store: Store, *, set_name: str, methods: Iterable[str] = shape.
     for method in methods:
         models = ({g: shape.pca_model(r["features"] for r in group) for g, group in kinds.items()}
                   if method == "pca" else None)
-        result = shape.cluster(rows, method, models=models)
+        prev = store.carry_of(set_name, method)
+        if fresh and prev is not None:
+            prev = {**prev, "clusters": []}
+        result = shape.cluster(rows, method, models=models, previous=prev)
         # 묶음 지도 — 묶음 범위(스캔 종류, 척, 센서)마다 따로 (SL-MAP-1). rows 는 id 순이라 결과가 결정적이다.
         maps: dict[str, dict] = {}
         points: list[tuple] = []
@@ -193,7 +200,7 @@ def run_clusters(store: Store, *, set_name: str, methods: Iterable[str] = shape.
             feature_version=shape.FEATURE_VERSION, method=method, maps=maps, points=points)
         results[method] = result
         out["methods"][method] = {"run_id": run_id, "clusters": len(result["clusters"]),
-                                  "unclustered": len(result["unclustered"]),
+                                  "unclustered": len(result["unclustered"]), "changes": result["changes"],
                                   "quality": shape.cluster_quality(result, labels, tree)}
     if "skew" in results and "pca" in results:
         out["agreement"] = shape.partition_agreement(results["skew"], results["pca"])

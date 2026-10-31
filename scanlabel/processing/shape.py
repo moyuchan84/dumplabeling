@@ -942,12 +942,14 @@ def check_method(method: str) -> None:
         raise ValueError(f"묶음 잣대는 {', '.join(METHODS)} 중 하나: {method!r}")
 
 
-def cluster(items: list[Mapping], method: str = "skew", *, models: Optional[Mapping] = None) -> dict:
+def cluster(items: list[Mapping], method: str = "skew", *, models: Optional[Mapping] = None,
+            previous: Optional[Mapping] = None) -> dict:
     """라벨과 무관하게 본 기록들을 모양으로 묶는다 (SL-CLU-2).
 
     items 의 각 항목: `id` · `features` · `scan_enum` · `chuck_id` · `sensor_id`(없으면 ''). 호출자가 범위마다
-    `CLUSTER_MAX_N` 개로 잘라서 넣는다. **(스캔 종류, 척, 센서)** 마다 따로 묶는다 — 경로가 다르면 1D 비교가
-    무의미하고(SL-SIM-2), 척 · 센서가 다르면 신호의 기준이 달라 모양의 차이가 원인의 차이가 아니다(SL-CLU-3).
+    `CLUSTER_MAX_N` 개로 잘라서 넣는다(라벨된 기록은 자르지 않는다, SL-CLU-12). **(스캔 종류, 척, 센서)** 마다
+    따로 묶는다 — 경로가 다르면 1D 비교가 무의미하고(SL-SIM-2), 척 · 센서가 다르면 신호의 기준이 달라 모양의
+    차이가 원인의 차이가 아니다(SL-CLU-3).
 
     잣대는 `method` — **채널 간 편차**(`skew`, SL-CLU-9) 또는 **주성분**(`pca`, SL-CLU-10; `models` 는
     범위 → `pca_model`, 없으면 여기서 낸다). 투영식에 놓이지 않는 기록은 「묶이지 않음」이다.
@@ -957,21 +959,32 @@ def cluster(items: list[Mapping], method: str = "skew", *, models: Optional[Mapp
     묶음이 `CLUSTER_MIN_SIZE` 보다 작아지면 멈추고 나머지는 「묶이지 않음」이다. 구성원 모두가
     **대표와 직접** 닮았으므로 한 묶음이 사슬처럼 늘어나 서로 다른 모양을 잇지 않는다.
     결과는 결정적이다(동점은 이웃 점수 합, 그다음 id).
+
+    `previous`(지난 판 — `{"clusters": [{"no", "representative", "members": [id…]}…], "next_no"}`)를 주면
+    **이어서 묶는다**(SL-CLU-13): 지난 묶음마다 대표(없으면 남은 구성원 중 이웃이 가장 많은 것)를 다시 세우고,
+    대표와 아직 `CLUSTER_MIN` 이상인 지난 구성원은 그 묶음에 남긴다. 그다음 남은 기록은 대표와 가장 닮은
+    이어받은 묶음에 합류한다(`CLUSTER_MIN` 이상일 때). `CLUSTER_MIN_SIZE` 보다 작아진 묶음은 풀고, 나머지로
+    처음처럼 새 묶음을 뗀다. 이어받은 묶음은 지난 **번호**(`no`)를 그대로, 새 묶음은 쓴 적 없는 번호를 받는다.
+    누가 몇 번 다시 묶어도 닮음이 그대로인 기록은 같은 번호에 남는다 — 결과가 사람마다 흔들리지 않게.
+    `changes` = 지난 판과 견준 기록 수(`shape.run_changes`).
     """
     check_method(method)
     groups: dict[tuple[str, str, str], list[Mapping]] = {}
     for it in items:
         groups.setdefault(group_of(it), []).append(it)
+    prev = list((previous or {}).get("clusters") or [])
+    prev_by_rec = {m: p for p in prev for m in p["members"]}
 
     clusters: list[dict] = []
     unclustered: list = []
     for scan_enum, chuck_id, sensor_id in sorted(groups):
         group = groups[(scan_enum, chuck_id, sensor_id)]
         ids = [g["id"] for g in group]
+        at = {rid: i for i, rid in enumerate(ids)}
         model = None
         if method == "pca":
             gid = (scan_enum, chuck_id, sensor_id)
-            model = models[gid] if models is not None and gid in models else                 pca_model(g["features"] for g in group)
+            model = models[gid] if models is not None and gid in models else pca_model(g["features"] for g in group)
         score = _scorer(group, method, model)
         n = len(group)
         nb: list[dict[int, float]] = [{} for _ in range(n)]
@@ -982,6 +995,42 @@ def cluster(items: list[Mapping], method: str = "skew", *, models: Optional[Mapp
                     nb[i][j] = s
                     nb[j][i] = s
         left = set(range(n))
+
+        def take(rep: int, near: set, no: Optional[int]) -> None:
+            members = [{"id": ids[rep], "score": 1.0, "representative": True}]
+            members += sorted(({"id": ids[j], "score": nb[rep][j], "representative": False} for j in near),
+                              key=lambda m: (-m["score"], _order_key(m["id"])))
+            clusters.append({"scan_enum": scan_enum, "chuck_id": chuck_id, "sensor_id": sensor_id,
+                             "representative": ids[rep], "members": members, "no": no})
+
+        # 1) 지난 묶음 이어받기 — 이 범위에 구성원이 남은 것만, 큰 것부터.
+        mine = {id(p): p for rid in ids if (p := prev_by_rec.get(rid)) is not None}
+        carried: list[tuple[dict, int, set]] = []
+        for p in sorted(mine.values(), key=lambda p: (-len(p["members"]), _order_key(p["no"]))):
+            old = [at[r] for r in p["members"] if r in at and at[r] in left]
+            if not old:
+                continue
+            rep = at.get(p["representative"])
+            if rep is None or rep not in left:
+                pool = set(old)
+                rep = max(old, key=lambda i: (len(nb[i].keys() & pool), sum(nb[i][j] for j in nb[i].keys() & pool),
+                                              -_order_key(ids[i])))
+            keep = {j for j in old if j != rep and j in nb[rep]}
+            carried.append((p, rep, keep))
+            left -= keep | {rep}
+        # 2) 남은 기록(새 기록 · 지난 판에 안 묶였던 기록)은 가장 닮은 이어받은 묶음에 합류한다.
+        for j in sorted(left, key=lambda i: _order_key(ids[i])):
+            best = max(((nb[rep][j], -k) for k, (_, rep, _) in enumerate(carried) if j in nb[rep]), default=None)
+            if best is not None:
+                carried[-best[1]][2].add(j)
+                left.discard(j)
+        # 3) 작아진 묶음은 푼다 — 그 구성원은 새 묶음의 재료로 돌아간다.
+        for p, rep, keep in carried:
+            if len(keep) + 1 < CLUSTER_MIN_SIZE:
+                left |= keep | {rep}
+            else:
+                take(rep, keep, p["no"])
+        # 4) 나머지로 처음처럼 새 묶음.
         while left:
             def density(i: int) -> tuple:
                 near = nb[i].keys() & left
@@ -990,17 +1039,44 @@ def cluster(items: list[Mapping], method: str = "skew", *, models: Optional[Mapp
             near = nb[rep].keys() & left
             if len(near) + 1 < CLUSTER_MIN_SIZE:
                 break
-            members = [{"id": ids[rep], "score": 1.0, "representative": True}]
-            members += sorted(({"id": ids[j], "score": nb[rep][j], "representative": False} for j in near),
-                              key=lambda m: (-m["score"], _order_key(m["id"])))
-            clusters.append({"scan_enum": scan_enum, "chuck_id": chuck_id, "sensor_id": sensor_id,
-                             "representative": ids[rep], "members": members})
+            take(rep, near, None)
             left -= near | {rep}
         unclustered += [ids[i] for i in sorted(left)]
 
     clusters.sort(key=lambda c: (-len(c["members"]), c["scan_enum"], c["chuck_id"], c["sensor_id"],
                                  _order_key(c["representative"])))
-    return {"clusters": clusters, "unclustered": unclustered}
+    # 번호 — 이어받은 묶음은 지난 번호, 새 묶음은 쓴 적 없는 번호(풀린 묶음의 번호도 다시 쓰지 않는다).
+    next_no = max([int((previous or {}).get("next_no") or 1)] + [int(p["no"]) + 1 for p in prev])
+    for c in clusters:
+        if c["no"] is None:
+            c["no"] = next_no
+            next_no += 1
+    out = {"clusters": clusters, "unclustered": unclustered, "next_no": next_no}
+    out["changes"] = run_changes(previous, out) if previous is not None else None
+    return out
+
+
+def run_changes(previous: Optional[Mapping], result: Mapping) -> dict:
+    """지난 판과 견준 이번 판 — 기록 수로 (SL-CLU-13). 화면이 「지난 판과 무엇이 달라졌나」를 말한다.
+
+    `kept` 같은 번호에 남음 · `moved` 다른 번호로 옮김 · `joined` 지난 판에 묶음이 없던 기록이 묶임(새 기록 포함) ·
+    `released` 묶음에 있다가 이번엔 묶이지 않음 · `out` 지난 판 구성원이 이번 판에 없음(풀에서 빠짐) ·
+    `new_clusters` 새 번호 · `closed_clusters` 이번 판에 없는 지난 번호.
+    """
+    before = {m: int(p["no"]) for p in (previous or {}).get("clusters") or [] for m in p["members"]}
+    after = {m["id"]: int(c["no"]) for c in result["clusters"] for m in c["members"]}
+    seen = set(after) | set(result["unclustered"])
+    old_nos = {int(p["no"]) for p in (previous or {}).get("clusters") or []}
+    new_nos = {int(c["no"]) for c in result["clusters"]}
+    return {
+        "kept": sum(1 for r, no in after.items() if before.get(r) == no),
+        "moved": sum(1 for r, no in after.items() if r in before and before[r] != no),
+        "joined": sum(1 for r in after if r not in before),
+        "released": sum(1 for r in result["unclustered"] if r in before),
+        "out": sum(1 for r in before if r not in seen),
+        "new_clusters": len(new_nos - old_nos),
+        "closed_clusters": len(old_nos - new_nos),
+    }
 
 
 # ─── 묶음 지도 (2D) ──────────────────────────────────────────────────────────

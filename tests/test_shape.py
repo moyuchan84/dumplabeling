@@ -481,3 +481,66 @@ def test_pca_scores_like_skew_and_needs_the_scopes_channel_set():
     assert shape.pca_model(recs[:2]) is None
     with pytest.raises(ValueError):
         shape.check_method("pcaa")
+
+
+# ─── 이어서 묶기 (SL-CLU-13) ────────────────────────────────────────────────
+
+def carry(result):
+    """묶음 결과 → 다음 판이 이어받을 `previous` (Store.carry_of 와 같은 모양)."""
+    return {"next_no": result["next_no"],
+            "clusters": [{"no": c["no"], "representative": c["representative"],
+                          "members": [m["id"] for m in c["members"]]} for c in result["clusters"]]}
+
+
+def numbers(result):
+    return {m["id"]: c["no"] for c in result["clusters"] for m in c["members"]}
+
+
+def item_skew(i, dev, **kw):
+    return {"id": i, "features": skewed(dev, **kw), "scan_enum": "S", "chuck_id": "", "sensor_id": ""}
+
+
+def test_reclustering_keeps_numbers_and_lets_new_records_join():
+    # 오른쪽 어긋남 넷(1–4) · 왼쪽 어긋남 넷(5–8) · 평소 다섯(9–13)
+    items = [item_skew(i, RIGHT if i < 5 else LEFT if i < 9 else NONE, gain=1.0 + 0.1 * i) for i in range(1, 14)]
+    first = shape.cluster(items)
+    assert first["changes"] is None and len(first["clusters"]) == 3
+    before = numbers(first)
+    # 새 기록이 들어온다 — 오른쪽 어긋남 하나 더, 그리고 처음 보는 어긋남(가운데) 셋
+    mid = lambda x, z: 0.4 if 0.4 < x < 0.6 else 0.0
+    more = items + [item_skew(14, RIGHT, gain=2.5)] + [item_skew(i, mid, gain=1.0 + 0.1 * i) for i in (15, 16, 17)]
+    second = shape.cluster(more, previous=carry(first))
+    after = numbers(second)
+    assert all(after[r] == no for r, no in before.items())              # 지난 구성원은 같은 번호에
+    assert after[14] == before[1]                                       # 새 기록은 닮은 묶음에 합류
+    assert {after[15], after[16], after[17]} == {first["next_no"]}      # 새 묶음은 쓴 적 없는 번호
+    assert second["changes"] == {"kept": 13, "moved": 0, "joined": 4, "released": 0, "out": 0,
+                                 "new_clusters": 1, "closed_clusters": 0}
+    # 아무것도 안 바뀐 채 누가 다시 눌러도 그대로다
+    third = shape.cluster(more, previous=carry(second))
+    assert numbers(third) == after and third["changes"]["kept"] == len(after) and third["next_no"] == second["next_no"]
+
+
+def test_a_carried_cluster_survives_losing_its_representative_and_a_dissolved_number_is_not_reused():
+    items = [item_skew(i, RIGHT, gain=1.0 + 0.1 * i) for i in range(1, 5)] + \
+            [item_skew(i, LEFT, gain=1.0 + 0.1 * i) for i in range(5, 8)]
+    first = shape.cluster(items)
+    right = next(c for c in first["clusters"] if c["representative"] in (1, 2, 3, 4))
+    left = next(c for c in first["clusters"] if c is not right)
+    # 오른쪽 묶음의 대표가 풀에서 빠지고, 왼쪽 묶음은 둘만 남는다
+    rest = [it for it in items if it["id"] not in (right["representative"], 7)]
+    second = shape.cluster(rest, previous=carry(first))
+    assert [c["no"] for c in second["clusters"]] == [right["no"]]       # 대표가 바뀌어도 같은 번호
+    assert second["changes"]["out"] == 2 and second["changes"]["closed_clusters"] == 1
+    # 왼쪽 무리가 다시 커지면 새 번호 — 풀렸던 번호는 다시 쓰지 않는다
+    back = rest + [item_skew(7, LEFT, gain=1.7), item_skew(8, LEFT, gain=1.8)]
+    third = shape.cluster(back, previous=carry(second))
+    nos = sorted(c["no"] for c in third["clusters"])
+    assert left["no"] not in nos and max(nos) >= first["next_no"]
+
+
+def test_a_fresh_run_ignores_the_previous_partition_but_not_its_numbers():
+    items = [item_skew(i, RIGHT, gain=1.0 + 0.1 * i) for i in range(1, 5)]
+    first = shape.cluster(items)
+    fresh = shape.cluster(items, previous={"next_no": first["next_no"], "clusters": []})
+    assert [c["no"] for c in fresh["clusters"]] == [first["next_no"]]

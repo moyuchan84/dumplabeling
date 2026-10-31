@@ -55,10 +55,11 @@ VS Code 에서는 워크스페이스의 `scanlabel API (8100)` 구성(또는 com
 
 ```powershell
 .\.venv\Scripts\python -m scanlabel.application.jobs index           # 이어서 읽는다 (커서는 DB 의 index_cursors)
-.\.venv\Scripts\python -m scanlabel.application.jobs cluster         # 화면의 「다시 묶기」와 같은 일
+.\.venv\Scripts\python -m scanlabel.application.jobs cluster         # 화면의 「다시 묶기」와 같은 일 (지난 판을 이어서)
+.\.venv\Scripts\python -m scanlabel.application.jobs cluster --fresh # 문턱 · 재료를 바꾼 뒤 처음부터 (번호는 이어서)
 ```
 
-묶기는 (스캔 종류, 센서)마다 따로 하고, 그 범위마다 최근 기록 `CLUSTER_MAX_N`(800)개까지입니다 — 모든 쌍을 비교하므로(800개에 약 6초) 상한이
+묶기는 (스캔 종류, 척, 센서)마다 따로 하고, 그 범위마다 **라벨된 기록 전부** + 라벨 없는 최근 기록 `CLUSTER_MAX_N`(800)개까지입니다 — 모든 쌍을 비교하므로(800개에 약 6초) 상한이
 있고, 넘친 수는 결과에 `truncated` 로 나옵니다.
 
 묶는 기준 · 다시 묶기 흐름 · 묶음 지도 화면이 그리는 조건 · 묶이지 않는 경우는 [`docs/cluster-logic.html`](docs/cluster-logic.html) 에 그림과 함께 정리했습니다(브라우저로 엽니다 — 코드 흐름 기준, 개발자용).

@@ -362,7 +362,7 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
                 "records": run["n_records"],
                 "clusters": run["n_clusters"], "unclustered": run["n_unclustered"],
                 "truncated": run["truncated"], "threshold": _r(run["threshold"]),
-                "min_size": run["min_size"],
+                "min_size": run["min_size"], "changes": run.get("changes"),
                 "stale": store.pool_changed_since(set_name=set_name, seq=int(run["pool_seq"]))}
 
     def clusters_view(set_name: str, scan_enum: Optional[str], method: str) -> dict:
@@ -381,7 +381,8 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
         rep_feats = store.features_of([g[0]["record_id"] for g in groups.values()])
         full_run = store.latest_run(set_name, method)
         out = []
-        for no, members in sorted(groups.items()):
+        # 큰 묶음부터 — 번호는 이어받은 것이라 크기 순이 아니다(SL-CLU-13).
+        for no, members in sorted(groups.items(), key=lambda t: (-len(t[1]), t[0])):
             rep = members[0]
             if scan_enum is not None and rep["scan_enum"] != scan_enum:
                 continue

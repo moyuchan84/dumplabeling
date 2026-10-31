@@ -283,3 +283,37 @@ def test_clusters_and_the_map_are_per_scan_kind_chuck_and_sensor(client, dsn, fl
     d1, d2 = (client.get(f"/records/{p}", params=vs).json() for p in pts)
     assert d1["vs"]["profiles"] == d2["vs"]["profiles"] and d1["vs"]["skew"] == d2["vs"]["skew"]
     assert d1["vs"]["skew_similarity"]["channels"] == ["A", "B"] and d1["chuck_id"] == "CH2"
+
+
+def test_labelled_records_always_stay_in_the_pool_past_the_cap(client, dsn, fleet):
+    # 범위마다 라벨 없는 기록만 최근 것부터 자르고, 라벨된 기록은 오래돼도 늘 묶는다 (SL-CLU-12)
+    ids = seed(dsn)
+    names = put_files(fleet, 1, "p", synth.peak(), 5)
+    label(client, 1, names[0], f"{names[0]}::a", ids["단일 피크"])      # 가장 먼저 본 기록에 라벨
+    for n in names[1:]:
+        open_file(client, 1, n)
+    store = Store(dsn)
+    try:
+        rows, total, cut, _ = store.pool(set_name="dump", per_scan_limit=2)
+    finally:
+        store.close()
+    by_name = {r["id"]: r["labelled"] for r in rows}
+    assert total == 5 and len(rows) == 3 and cut == 2                    # 라벨된 1 + 최근 라벨 없음 2
+    assert sum(by_name.values()) == 1
+
+
+def test_pressing_rerun_again_keeps_cluster_numbers_and_says_what_changed(client, dsn, fleet):
+    # 여러 사람이 다시 묶기를 눌러도, 닮음이 그대로인 기록은 같은 번호에 남는다 (SL-CLU-13)
+    seed(dsn)
+    for n in put_files(fleet, 1, "p", synth.peak(), 4) + put_files(fleet, 1, "e", synth.edge_drop(), 3):
+        open_file(client, 1, n)
+    first = rerun(client)
+    assert first["run"]["changes"] is None                               # 처음 묶은 판 — 견줄 지난 판이 없다
+    before = {c["representative"]["source"]: c["cluster_no"] for c in first["clusters"]}
+    for n in put_files(fleet, 1, "q", synth.peak(), 1):                  # 닮은 새 기록 하나
+        open_file(client, 1, n)
+    second = rerun(client)
+    assert {c["representative"]["source"]: c["cluster_no"] for c in second["clusters"]} == before
+    ch = second["run"]["changes"]
+    assert ch["joined"] == 1 and ch["moved"] == 0 and ch["new_clusters"] == 0
+    assert second["run"]["id"] != first["run"]["id"]

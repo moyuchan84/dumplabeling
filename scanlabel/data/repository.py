@@ -288,19 +288,24 @@ class Store:
         return len(rows)
 
     def pool(self, *, set_name: str, per_scan_limit: int) -> tuple[list[dict], int, int, int]:
-        """묶을 기록 — 묶음 범위(스캔 종류, 척, 센서)마다 최근 것부터 `per_scan_limit` 개.
+        """묶을 기록 — 묶음 범위(스캔 종류, 척, 센서)마다 **라벨된 기록 전부** + 라벨 없는 기록 최근 것부터
+        `per_scan_limit` 개 (SL-CLU-12). 라벨된 기록은 오래돼도 묶음 · 지도에서 빠지지 않는다.
 
-        (행들, 전체 수, 잘린 수, 풀의 최대 seq). 한 트랜잭션에서 읽어 넷이 서로 맞는다.
+        (행들, 전체 수, 잘린 수, 풀의 최대 seq). 한 트랜잭션에서 읽어 넷이 서로 맞는다. 행마다 `labelled`.
         """
         with self._conn() as c, c.transaction():
             c.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             head = c.execute("SELECT count(*) AS n, COALESCE(max(seq), 0) AS seq FROM scan_records"
                              " WHERE set_name = %s", (set_name,)).fetchone()
             rows = c.execute(
-                "SELECT id, scan_enum, chuck_id, sensor_id, features FROM ("
-                "  SELECT id, scan_enum, chuck_id, sensor_id, features, row_number() OVER"
-                "   (PARTITION BY scan_enum, chuck_id, sensor_id ORDER BY seq DESC, id DESC) AS rn"
-                "  FROM scan_records WHERE set_name = %s) t WHERE rn <= %s ORDER BY id",
+                "SELECT id, scan_enum, chuck_id, sensor_id, features, labelled FROM ("
+                "  SELECT *, row_number() OVER"
+                "   (PARTITION BY scan_enum, chuck_id, sensor_id, labelled ORDER BY seq DESC, id DESC) AS rn FROM ("
+                "    SELECT r.id, r.scan_enum, r.chuck_id, r.sensor_id, r.features, r.seq,"
+                "     EXISTS (SELECT 1 FROM scan_labels l WHERE l.servername = r.servername"
+                "      AND l.set_name = r.set_name AND l.name = r.name AND l.source = r.source) AS labelled"
+                "    FROM scan_records r WHERE r.set_name = %s) a) t"
+                " WHERE labelled OR rn <= %s ORDER BY id",
                 (set_name, per_scan_limit)).fetchall()
         total = int(head["n"])
         return rows, total, total - len(rows), int(head["seq"])
@@ -353,17 +358,21 @@ class Store:
                          points: Optional[list[tuple]] = None) -> int:
         """묶음 결과 한 벌을 저장한다. 그 set · 잣대(`method`)의 이전 결과는 지운다 — 최신 것 하나만 있다.
 
+        묶음 번호는 결과의 `no`(이어받은 번호, SL-CLU-13 — 없으면 크기 순), 판에 `next_no` · `changes` 를 남긴다.
         `maps` = 묶음 범위 키(`shape.group_key`) → 투영식, `points` = (record_id, scan_enum, chuck_id, sensor_id, x, y)
         — 묶음 지도(SL-MAP).
         """
+        nos = [int(cl.get("no") or k) for k, cl in enumerate(result["clusters"], start=1)]
         with self._conn() as c, c.transaction():
             c.execute("DELETE FROM cluster_runs WHERE set_name = %s AND method = %s", (set_name, method))
             run_id = int(c.execute(
                 "INSERT INTO cluster_runs (set_name, method, threshold, min_size, feature_version, n_records,"
-                " n_clusters, n_unclustered, truncated, pool_seq, created_at)"
-                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                " n_clusters, n_unclustered, truncated, pool_seq, created_at, next_no, changes)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
                 (set_name, method, threshold, min_size, feature_version, n_records, len(result["clusters"]),
-                 len(result["unclustered"]), truncated, pool_seq, timebase.now_iso())).fetchone()["id"])
+                 len(result["unclustered"]), truncated, pool_seq, timebase.now_iso(),
+                 int(result.get("next_no") or max(nos, default=0) + 1),
+                 Jsonb(result["changes"]) if result.get("changes") is not None else None)).fetchone()["id"])
             if maps:
                 with c.cursor() as cur:
                     cur.executemany("INSERT INTO cluster_maps (run_id, group_key, proj) VALUES (%s,%s,%s)",
@@ -379,8 +388,24 @@ class Store:
                     "INSERT INTO cluster_members (run_id, cluster_no, record_id, scan_enum, chuck_id, sensor_id, score,"
                     " representative) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
                     [(run_id, no, m["id"], cl["scan_enum"], cl.get("chuck_id", ""), cl.get("sensor_id", ""), m["score"], m["representative"])
-                     for no, cl in enumerate(result["clusters"], start=1) for m in cl["members"]])
+                     for no, cl in zip(nos, result["clusters"]) for m in cl["members"]])
         return run_id
+
+    def carry_of(self, set_name: str, method: str) -> Optional[dict]:
+        """그 잣대의 최신 판을 `shape.cluster(previous=…)` 의 모양으로 — 없으면 None (SL-CLU-13)."""
+        run = self.latest_run(set_name, method)
+        if run is None:
+            return None
+        with self._conn() as c:
+            rows = c.execute("SELECT cluster_no, record_id, representative FROM cluster_members WHERE run_id = %s"
+                             " ORDER BY cluster_no, representative DESC, record_id", (run["id"],)).fetchall()
+        by: dict[int, dict] = {}
+        for r in rows:
+            p = by.setdefault(int(r["cluster_no"]), {"no": int(r["cluster_no"]), "representative": None, "members": []})
+            p["members"].append(int(r["record_id"]))
+            if r["representative"]:
+                p["representative"] = int(r["record_id"])
+        return {"run_id": int(run["id"]), "next_no": int(run["next_no"]), "clusters": list(by.values())}
 
     def latest_run(self, set_name: str, method: str = "skew") -> Optional[dict]:
         with self._conn() as c:

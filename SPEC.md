@@ -179,7 +179,7 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 ## Clusters (SL-CLU)
 
 - `SL-CLU-1` A cluster run groups the pool and is **stored** (`cluster_runs` + `cluster_members`, only the latest
-  run per set **and measure** (`SL-CLU-10`) is kept), so the screen, the cluster numbers and a bulk label all refer to the same result. It runs on
+  run per set **and measure** (`SL-CLU-10`) is kept — a re-run carries the last one forward, `SL-CLU-13`), so the screen, the cluster numbers and a bulk label all refer to the same result. It runs on
   request (`POST /clusters/run`, the screen's 「다시 묶기」) or from `jobs cluster`; nothing re-clusters behind a
   reader's back. A run remembers the pool's highest `seq`; a higher one in the pool makes it `stale`.
 - `SL-CLU-2` The method is **representative-seeded grouping**: all pairs within one group (`SL-CLU-3`) are compared
@@ -195,7 +195,7 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   「실제 clustering 할때 데이터에서 sensor_id + scan_enum 까지 grouping 해야할거같은데」; 2026-10-30: 「scan_enum / chuck_id /
   sensor_id 가 grouping key 로 묶어야하고」). The chuck and sensor are `meta.chuck_id` · `meta.sensor_id` as text, `""`
   when absent, stored as `scan_records.chuck_id` · `scan_records.sensor_id`. Each group is capped at the `CLUSTER_MAX_N` (800) most
-  recently changed records — the comparison is n², measured at ≈ 6 s for 800 (`math.sumprod`, prepared z-scores,
+  recently changed **unlabelled** records — labelled ones are always in (`SL-CLU-12`) — the comparison is n², measured at ≈ 6 s for 800 (`math.sumprod`, prepared z-scores,
   `shape.prepare`, which scores exactly like the raw snapshot); the cut is reported as `truncated`.
   [test: "test_prepared_features_score_exactly_like_raw_snapshots" · "test_clusters_never_mix_sensors_of_one_scan_kind" · "test_clusters_never_mix_chucks_of_one_scan_kind_and_sensor" · "test_clusters_and_the_map_are_per_scan_kind_and_sensor" · "test_clusters_and_the_map_are_per_scan_kind_chuck_and_sensor"]
   Not yet: the suggestion scope (`same_scan_only`, `SL-SIM-2`) is still the scan kind alone.
@@ -304,6 +304,37 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   (curve weight 0.15: 76 clusters); skew-vs-pca adjusted Rand 0.716 → 0.552. The finer split is the curve telling apart
   records whose skew sits in different parts of the scan; whether that is the right granularity can only be judged on
   real tr/txh/tyh labels. Revisit when they are labelled: tune `W_SEQ` and the PCA curve weight there.
+
+- `SL-CLU-12` **A labelled record is always clustered and always on the map** (2026-10-31, the user: 「묶기 할때 한번이라도
+  라벨링 된 데이터는 항상 별도 관리되어서 항상 묶음지도에 나와야할거같은데」 — a record labelled even once must always be
+  in the clusters and on the map). `Store.pool` takes, per group, **every labelled record** plus the `CLUSTER_MAX_N` most
+  recently changed unlabelled ones; `truncated` counts unlabelled records only. Before, the cap ranked by `seq` alone and
+  labelling does not move `seq` (`SL-POOL-3`), so once 800 newer records arrived in a group its labelled records dropped
+  out of the run, the map and the clusters' categories. Cost: the n² comparison grows with the labelled count; revisit
+  when one group's labelled records near the cap. [test: "test_labelled_records_always_stay_in_the_pool_past_the_cap"]
+- `SL-CLU-13` **A re-run carries the last run forward** (2026-10-31, the user: 「다른사람들이 각 엔지니어들이 동일한걸 검색하고
+  다시묶기를 누르면 계속 다른 결과가 나오는거 아닌가, 한명만 쓰는 프로그램이 아닌데」 → 「안정적이 결과가 잘 변하지 않게
+  사람들이 정합성에 문제가 없다고 느끼는 방향으로」 — many engineers press 다시 묶기; the result must stay put so people
+  trust it). `shape.cluster(previous=…)` (`Store.carry_of` reads the latest run of the measure): per group, each last
+  cluster re-seats its representative (if it left the pool: the remaining member with most neighbours among them);
+  last members still ≥ `CLUSTER_MIN` to it **stay**; every other record (new, or unclustered last time) **joins** the
+  carried cluster whose representative it resembles most (≥ `CLUSTER_MIN`); a carried cluster under `CLUSTER_MIN_SIZE`
+  is dissolved; the rest is clustered as in `SL-CLU-2`. A carried cluster keeps its **number**; a new one takes the
+  run's `next_no` onward — a number is never reused (migration `0008`: `cluster_runs.next_no`). The run stores
+  `changes` (`shape.run_changes`: kept · moved · joined · released · out · new · closed), which `GET /clusters` returns
+  and the screen states (poc_viewer `DUMP-CLU-19`). The list is ordered by size, not by number. `jobs cluster --fresh`
+  ignores the last partition (numbers still continue) — for after a threshold or material change. Still one stored
+  run per measure; a bulk label still names its `run_id` (`SL-CLU-5`). The map is recomputed per run, so points may
+  shift; numbers and members are the reference.
+  [test: "test_reclustering_keeps_numbers_and_lets_new_records_join" · "test_a_carried_cluster_survives_losing_its_representative_and_a_dissolved_number_is_not_reused" · "test_a_fresh_run_ignores_the_previous_partition_but_not_its_numbers" · "test_pressing_rerun_again_keeps_cluster_numbers_and_says_what_changed"]
+  Validation (local pool, 5,044 records, skew; the newest 10% per group held back, clustered, then added and re-run):
+  from scratch 795 of 4,337 previously clustered records kept their number (numbers were size ranks), partition
+  ARI vs the last run 0.986; carried 4,319 / 4,337 kept (moved 9, released 9, joined 507, new clusters 21), ARI 0.998;
+  pressed again with nothing new: all 4,835 kept, no change. 177 s for the four runs.
+  Rejected: scheduled-only re-runs (a reviewer who labels a batch waits a day to see it; carrying makes a press cheap
+  in consequence instead of rare); keeping every run as history (the screen would have to say which run a number
+  belongs to — carried numbers make the latest run the one reference). Revisit when authorship exists (SSO): record
+  who re-ran.
 
 ## Docs for readers (SL-DOC)
 
