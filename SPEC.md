@@ -182,13 +182,36 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   run per set **and measure** (`SL-CLU-10`) is kept — a re-run carries the last one forward, `SL-CLU-13`), so the screen, the cluster numbers and a bulk label all refer to the same result. It runs on
   request (`POST /clusters/run`, the screen's 「다시 묶기」) or from `jobs cluster`; nothing re-clusters behind a
   reader's back. A run remembers the pool's highest `seq`; a higher one in the pool makes it `stale`.
-- `SL-CLU-2` The method is **representative-seeded grouping**: all pairs within one group (`SL-CLU-3`) are compared
-  by the **inter-channel skew score** (`SL-CLU-9`), the record with the most neighbours ≥ `CLUSTER_MIN` (0.80) becomes a
-  representative, it and its remaining neighbours
-  form a cluster, repeat; groups smaller than `CLUSTER_MIN_SIZE` (3) stay unclustered. Every member resembles the
-  representative **directly**, so a cluster cannot chain unlike shapes together; ties break by neighbour score sum,
-  then id — deterministic.
-  [test: "test_clusters_group_like_shapes_and_leave_the_rest_unclustered" · "test_clusters_never_mix_scan_kinds"]
+- `SL-CLU-2` The method is **threshold-free hierarchical clustering** (2026-11-02, the user: 「사실 0.8이라는 기준이
+  안되더라도 그냥 그래프 값이 비슷해서 클러스터링 되는걸 보고 싶던거라 꼭 0.8이라는 숫자로 제약을 안걸어도 좋을거같은데」 —
+  they wanted records whose graphs look alike to group, not a 0.8 cut). All pairs within one group (`SL-CLU-3`) are scored
+  by the measure (`SL-CLU-9` / `SL-CLU-10`), distance = 1 − score (an incomparable pair = 1); **average linkage**
+  (NN-chain + Lance–Williams, `shape._linkage`, O(n²) on one matrix) merges the closest clusters first; the dendrogram is
+  cut where the **mean silhouette** is highest (`shape.best_cut`, ties to fewer clusters) among the cuts with 2 …
+  `CLUSTER_K_MAX` (12) parts of at least `CLUSTER_MIN_SIZE` (cuts into up to 4 × that many parts are tried). Parts smaller
+  than that are **noise**: their records count 0 in the mean and never serve as "the nearest other cluster" — counting
+  them let a cut that peels off one stray record win, and a real group of the local pool came out as 「303 + 1」
+  (2026-11-02, seen on screen); leaving them out of the mean instead rewarded dissolving a small real cluster into noise.
+  When no cut scores above 0 the whole group is one cluster (nothing to split). Parts smaller than `CLUSTER_MIN_SIZE` (3)
+  stay unclustered; a record with no comparable partner is unclustered. The representative is the **medoid** (least
+  summed distance to the others) and a member's `score` is its score against it. Deterministic: the same pool gives the
+  same partition.
+  [test: "test_clusters_group_like_shapes_and_leave_the_rest_unclustered" · "test_clusters_never_mix_scan_kinds" · "test_clusters_need_no_similarity_threshold" · "test_a_group_of_alike_records_stays_one_cluster" · "test_never_splits_into_more_than_the_cap" · "test_a_stray_record_does_not_decide_the_cut"]
+  `CLUSTER_K_MAX` is a readability cap, not a similarity threshold: one map shows one group and draws every cluster's mean
+  graph beside it (poc_viewer `DUMP-CLU-20`), so a group past ~12 clusters stops being readable.
+  Validation (local pool, 5,044 records in 20 groups, 714 labels, demo channels `A`/`B` — **not** real tr/txh/tyh data,
+  labels given by shape; skew, measured in memory): the 0.80 representative method gave 318 clusters / 207 unclustered,
+  purity L1/L2/L3 1.0/0.999/0.913 (the stored run). Threshold-free, noise-aware silhouette, cap 12: **116 clusters / 27
+  unclustered, 0.982/0.980/0.855**, 2–12 clusters per group (e.g. 「114, 24, 21, 21, 20, 20, 18, 18, 16, 16, 15」 and
+  「164, 129」), 35 s for the pool (the old method 39 s). The first cut (silhouette over every part, singletons as 0) gave
+  cap 10 → 63 / 24, 0.948/0.877/0.737 and cap 12 → 78 / 26 — mostly because single outliers decided the cut. Purity falls
+  with fewer clusters by construction; the labels were given by shape, so it is not the skew measure's own yardstick.
+  Rejected: keeping a similarity threshold under another name (a distance cut on the dendrogram) — it is the 0.8 the user
+  asked to drop; k-means / k-medoids (needs k, and its result depends on the seed); the largest gap in merge heights
+  (one outlier's late merge wins). Revisit when real tr/txh/tyh records are labelled: compare purity at caps 8 / 12 / 20.
+  Before 2026-11-02: representative-seeded grouping — the record with the most neighbours ≥ `CLUSTER_MIN` (0.80) became a
+  representative and took those neighbours, repeat; it split the local pool into 318 clusters, many of a handful of
+  records that look alike on screen.
 - `SL-CLU-3` Clusters never cross a **group = (scan kind, chuck, sensor)** (`SL-SIM-2`; migrations `0005` · `0006`).
   Different scan kinds walked different trajectories; different sensors or chucks on one kind read on a different
   baseline, so mixing them makes "a different sensor/chuck" look like "a different shape" (2026-10-28, the user:
@@ -209,8 +232,9 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   [test: "test_a_cluster_label_is_applied_to_its_unlabelled_members_at_once"]
 - `SL-CLU-6` `/labels/similar` (with a `source`) answers `cluster`: the cluster the record belongs to in the latest
   run, with its category — the screen says 「이 기록은 묶음 #n 에 든다」 without a second call.
-- `SL-CLU-7` Thresholds (`CLUSTER_MIN`, `CLUSTER_MIN_SIZE`, `CLUSTER_AGREE`, `CLUSTER_MAX_N`) are heuristics in
-  `processing/shape.py`, like `SL-SUG-4`, and the run stores the values it used.
+- `SL-CLU-7` Constants (`CLUSTER_K_MAX`, `CLUSTER_MIN_SIZE`, `CLUSTER_AGREE`, `CLUSTER_MAX_N`) are heuristics in
+  `processing/shape.py`, like `SL-SUG-4`, and the run stores `min_size`; `cluster_runs.threshold` holds `CLUSTER_MIN` for
+  runs before migration `0009` and is null after.
 - `SL-CLU-8` `POST /clusters/run` **starts** the run in a background thread and answers 202 with the job; `GET
   /clusters` carries `job` (`running` · `done` · `failed` + reason). A second request while one runs gets the running
   job, not a second run. The job state lives in the API process's memory (one process; `jobs cluster` from the CLI
@@ -249,7 +273,7 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   (skew without the baseline: 98 % / 51 %; shape: 88 % / 1 %). Clusters: skew 89 clusters, 177 unclustered, label
   purity 0.869; shape with the same groups 121 / 114 / 0.984; before this change (shape, (scan kind, sensor)) 82 / 74 /
   0.984. `jobs cluster` 39 s (shape 42 s). Revisit when real tr/txh/tyh records are labelled: compare the two
-  measures' purity there, and tune `SKEW_FLOOR` / `CLUSTER_MIN` for skew.
+  measures' purity there, and tune `SKEW_FLOOR` for skew (`CLUSTER_MIN` left with `SL-CLU-2`, 2026-11-02).
 - `SL-CLU-10` **Two measures, both stored, the screen picks one**: `skew` (`SL-CLU-9`) and `pca` (principal
   components). One re-run (`POST /clusters/run`, `jobs cluster`) reads the pool once and stores a run per measure
   (`cluster_runs.method`, migration `0007`); every cluster / map / record route takes `method` (default `skew`, any
@@ -315,12 +339,14 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 - `SL-CLU-13` **A re-run carries the last run forward** (2026-10-31, the user: 「다른사람들이 각 엔지니어들이 동일한걸 검색하고
   다시묶기를 누르면 계속 다른 결과가 나오는거 아닌가, 한명만 쓰는 프로그램이 아닌데」 → 「안정적이 결과가 잘 변하지 않게
   사람들이 정합성에 문제가 없다고 느끼는 방향으로」 — many engineers press 다시 묶기; the result must stay put so people
-  trust it). `shape.cluster(previous=…)` (`Store.carry_of` reads the latest run of the measure): per group, each last
-  cluster re-seats its representative (if it left the pool: the remaining member with most neighbours among them);
-  last members still ≥ `CLUSTER_MIN` to it **stay**; every other record (new, or unclustered last time) **joins** the
-  carried cluster whose representative it resembles most (≥ `CLUSTER_MIN`); a carried cluster under `CLUSTER_MIN_SIZE`
-  is dissolved; the rest is clustered as in `SL-CLU-2`. A carried cluster keeps its **number**; a new one takes the
-  run's `next_no` onward — a number is never reused (migration `0008`: `cluster_runs.next_no`). The run stores
+  trust it). `shape.cluster(previous=…)` (`Store.carry_of` reads the latest run of the measure). Since 2026-11-02
+  (`SL-CLU-2` threshold-free) the partition is computed from the pool alone — the same pool gives the same partition,
+  so pressing again changes nothing — and the last run only **names** it: every (new cluster, last number) pair is counted
+  by shared members and, most shared first, a cluster takes the last number of the cluster it overlaps most (each number
+  once). A cluster overlapping none takes the run's `next_no` onward — a number is never reused (migration `0008`:
+  `cluster_runs.next_no`). Before, the last members ≥ `CLUSTER_MIN` to their representative stayed put and new records
+  joined; with no threshold there is no "still close enough", and keeping members by force would make the result depend
+  on the order runs were pressed in. The run stores
   `changes` (`shape.run_changes`: kept · moved · joined · released · out · new · closed), which `GET /clusters` returns
   and the screen states (poc_viewer `DUMP-CLU-19`). The list is ordered by size, not by number. `jobs cluster --fresh`
   ignores the last partition (numbers still continue) — for after a threshold or material change. Still one stored
@@ -335,6 +361,27 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   in consequence instead of rare); keeping every run as history (the screen would have to say which run a number
   belongs to — carried numbers make the latest run the one reference). Revisit when authorship exists (SSO): record
   who re-ran.
+
+## Drawings (SL-DRAW)
+
+- `SL-DRAW-1` **What the screen draws is the dashboard's two figures** (2026-11-02, the user: 「들인 그래프들에서 섬네일같이
+  나오는 그래프2개가 실제 poc_viewer에서 나오는 그래프와 연관성이 딱히 안보여서 직관적이지 않고」 · 「x단면, z단면, 측정순서도
+  원래 poc_viewer에 나오는 그래프와 전혀 매칭이 안되서」 — the X/Z cross-sections and skew curves matched nothing the reader
+  knows from poc_viewer). `shape.draw_shape(features)` = per channel the snapshot's **scan-order curve** (`path`,
+  `PATH_N`; the 「경로 겹쳐 보기」 compressed to scan progress) and its **cells** (`grid`, rows = Z from the bottom, cols =
+  X; the 「실공간 맵」), each scaled by that channel's own point mean and std (the `SL-CLU-9` normalisation — records differ
+  in gain and offset, and one scale per channel lets the channels overlay and show where they part). `GET /records/{id}`
+  returns it as `draw` (and `vs.draw`). The skew curves and profiles stay in the response for the guide and for later
+  use; the screen stops drawing them.
+  [test: "test_the_drawing_is_normalised_per_channel_like_the_dashboards_two_figures"]
+- `SL-DRAW-2` **Every cluster carries its mean drawing** (2026-11-02, the user: 「묶음별로 묶음 반경 근처에 대한값의 평균값으로
+  그래프 모양이 어떤지 묶음지도 그래프에 표시해주면 좋을거같고」 — show each cluster's average graph on the map).
+  `shape.mean_shape` = per channel present in at least half the members: the mean of their `draw_shape` curves per slot,
+  the 25th/75th percentile band (`lo` · `hi` — how uniform the cluster is) and the mean cells. Computed in the run and
+  stored per cluster (`cluster_shapes`, migration `0009`) so the list and the map do not re-read hundreds of members'
+  features. The list and the map get `shape.thin_shape` (mean curve only, `DRAW_THIN` 64 points); `GET /clusters/{no}`
+  gets the whole (computed on the spot for a run from before `0009`), and each member a thinned curve of its own.
+  [test: "test_a_clusters_mean_shape_is_the_members_average_with_a_band" · "test_clusters_group_unlabelled_records_and_read_the_labelled_members"]
 
 ## Docs for readers (SL-DOC)
 

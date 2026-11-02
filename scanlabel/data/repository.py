@@ -355,12 +355,14 @@ class Store:
     def save_cluster_run(self, *, set_name: str, result: dict, n_records: int, truncated: int,
                          pool_seq: int, threshold: float, min_size: int, feature_version: int,
                          method: str = "skew", maps: Optional[dict] = None,
-                         points: Optional[list[tuple]] = None) -> int:
+                         points: Optional[list[tuple]] = None,
+                         shapes: Optional[dict[int, dict]] = None) -> int:
         """묶음 결과 한 벌을 저장한다. 그 set · 잣대(`method`)의 이전 결과는 지운다 — 최신 것 하나만 있다.
 
         묶음 번호는 결과의 `no`(이어받은 번호, SL-CLU-13 — 없으면 크기 순), 판에 `next_no` · `changes` 를 남긴다.
         `maps` = 묶음 범위 키(`shape.group_key`) → 투영식, `points` = (record_id, scan_enum, chuck_id, sensor_id, x, y)
-        — 묶음 지도(SL-MAP).
+        — 묶음 지도(SL-MAP). `shapes` = 묶음 번호 → 평균 그림(`shape.mean_shape`, SL-DRAW-2).
+        `threshold` 는 문턱 없는 묶기(SL-CLU-2)부터 None.
         """
         nos = [int(cl.get("no") or k) for k, cl in enumerate(result["clusters"], start=1)]
         with self._conn() as c, c.transaction():
@@ -383,6 +385,10 @@ class Store:
                         "INSERT INTO cluster_points (run_id, record_id, scan_enum, chuck_id, sensor_id, x, y)"
                         " VALUES (%s,%s,%s,%s,%s,%s,%s)",
                         [(run_id, *p) for p in points])
+            if shapes:
+                with c.cursor() as cur:
+                    cur.executemany("INSERT INTO cluster_shapes (run_id, cluster_no, shape) VALUES (%s,%s,%s)",
+                                    [(run_id, int(no), Jsonb(v)) for no, v in shapes.items()])
             with c.cursor() as cur:
                 cur.executemany(
                     "INSERT INTO cluster_members (run_id, cluster_no, record_id, scan_enum, chuck_id, sensor_id, score,"
@@ -411,6 +417,16 @@ class Store:
         with self._conn() as c:
             return c.execute("SELECT * FROM cluster_runs WHERE set_name = %s AND method = %s"
                              " ORDER BY id DESC LIMIT 1", (set_name, method)).fetchone()
+
+    def cluster_shapes(self, run_id: int, cluster_nos: Optional[Iterable[int]] = None) -> dict[int, dict]:
+        """묶음의 평균 그림(SL-DRAW-2) — 묶음 번호 → `shape.mean_shape`. 0009 전의 판은 빈 dict."""
+        q = "SELECT cluster_no, shape FROM cluster_shapes WHERE run_id = %s"
+        args: list[Any] = [run_id]
+        if cluster_nos is not None:
+            q += " AND cluster_no = ANY(%s)"
+            args.append([int(n) for n in cluster_nos])
+        with self._conn() as c:
+            return {int(r["cluster_no"]): r["shape"] for r in c.execute(q, args).fetchall()}
 
     def run_map(self, run_id: int, group_key: str) -> Optional[dict]:
         """묶음 범위 하나의 지도 투영식 — 없으면 None (기록이 너무 적었던 범위)."""

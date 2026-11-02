@@ -194,10 +194,13 @@ def run_clusters(store: Store, *, set_name: str, methods: Iterable[str] = shape.
             if m["proj"] is not None:
                 maps[shape.group_key(*group_id)] = m["proj"]
             points += [(rid, *group_id, x, y) for rid, (x, y) in m["points"].items()]
+        # 묶음마다 구성원의 평균 그림 — 화면이 목록 · 지도 · 묶음에 그대로 그린다(SL-DRAW-2).
+        feats = {r["id"]: r["features"] for r in rows}
+        shapes = {int(c["no"]): shape.mean_shape(feats[m["id"]] for m in c["members"]) for c in result["clusters"]}
         run_id = store.save_cluster_run(
             set_name=set_name, result=result, n_records=len(rows), truncated=truncated, pool_seq=seq,
-            threshold=shape.CLUSTER_MIN, min_size=shape.CLUSTER_MIN_SIZE,
-            feature_version=shape.FEATURE_VERSION, method=method, maps=maps, points=points)
+            threshold=None, min_size=shape.CLUSTER_MIN_SIZE,
+            feature_version=shape.FEATURE_VERSION, method=method, maps=maps, points=points, shapes=shapes)
         results[method] = result
         out["methods"][method] = {"run_id": run_id, "clusters": len(result["clusters"]),
                                   "unclustered": len(result["unclustered"]), "changes": result["changes"],

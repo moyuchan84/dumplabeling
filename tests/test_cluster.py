@@ -8,6 +8,7 @@ import httpx
 from scanlabel.connectors.fleet import Fleet
 from scanlabel.application.usecases import index
 from scanlabel.data.repository import Store
+from scanlabel.processing import shape
 
 from . import synth
 from .test_api import file_of, label, seed
@@ -72,14 +73,19 @@ def test_clusters_group_unlabelled_records_and_read_the_labelled_members(client,
     assert first["size"] == 4 and first["labelled"] == 2 and first["unlabelled"] == 2
     assert first["category"]["path"] == "신호 이상 › 피크 › 단일 피크"
     assert first["category"]["case_id"] == 1 and first["category"]["share"] == 1.0
-    assert len(first["profile"]["x"]) == len(first["profile"]["z"]) == 16 and first["channel"] == "A"
+    # 묶음의 평균 그림(SL-DRAW-2) — 목록에는 채널마다 줄인 평균 곡선만
+    assert first["shape"]["n"] == 4 and len(first["shape"]["channels"]["A"]["path"]) == shape.DRAW_THIN
     assert second["size"] == 3 and second["category"] is None    # 아무도 라벨하지 않았다
 
     # 묶음 상세 — 대표 먼저, 구성원마다 라벨과 겹쳐 그릴 경로
     detail = client.get(f"/clusters/{second['cluster_no']}", params={"run_id": res["run"]["id"]}).json()
     assert detail["members"][0]["representative"] is True
     assert {m["name"] for m in detail["members"]} == set(edges)
-    assert all(m["profile"].keys() == {"x", "z"} for m in detail["members"])
+    assert all(m["shape"]["channels"]["A"]["path"] for m in detail["members"])
+    full = detail["shape"]["channels"]["A"]                      # 상세는 띠와 칸까지
+    assert len(full["path"]) == len(full["lo"]) == len(full["hi"]) == shape.PATH_N
+    assert len(full["grid"]) == shape.GRID_N * shape.GRID_N
+    assert all(lo <= m <= hi for lo, m, hi in zip(full["lo"], full["path"], full["hi"]) if m is not None)
 
     # 이 기록이 든 묶음은 유사 응답에도 실린다
     sim = client.post("/labels/similar", json={"server_id": 2, "name": edges[0], "source": f"{edges[0]}::a"}).json()
@@ -275,13 +281,14 @@ def test_clusters_and_the_map_are_per_scan_kind_chuck_and_sensor(client, dsn, fl
 
     no = m["target"]["cluster_no"]
     detail = client.get(f"/clusters/{no}").json()
-    assert detail["chuck_id"] == "CH2" and set(detail["skew"]) == {"A", "B"}
+    assert detail["chuck_id"] == "CH2" and set(detail["shape"]["channels"]) == {"A", "B"}
     # 기록 상세 — 그림 재료는 기록마다 제 것만으로: 상대를 바꿔도 지금 기록의 곡선은 같다
     rid = m["target"]["record_id"]
     pts = [p["id"] for p in m["points"] if p["id"] != rid]
     vs = {"vs_server_id": 1, "vs_name": c2[0], "vs_source": f"{c2[0]}::a"}
     d1, d2 = (client.get(f"/records/{p}", params=vs).json() for p in pts)
     assert d1["vs"]["profiles"] == d2["vs"]["profiles"] and d1["vs"]["skew"] == d2["vs"]["skew"]
+    assert d1["vs"]["draw"] == d2["vs"]["draw"] and set(d1["draw"]) == {"A", "B"}
     assert d1["vs"]["skew_similarity"]["channels"] == ["A", "B"] and d1["chuck_id"] == "CH2"
 
 

@@ -33,7 +33,7 @@ def guide_values() -> dict[str, str]:
     pct = lambda x: f"{round(x * 100):d}"
     area = shape.PCA_MAT_W["area"]
     vals = {n: getattr(shape, n) for n in (
-        "GRID_N", "PATH_N", "CLUSTER_MIN", "CLUSTER_MIN_SIZE", "CLUSTER_MAX_N", "SKEW_FLOOR",
+        "GRID_N", "PATH_N", "CLUSTER_K_MAX", "CLUSTER_MIN_SIZE", "CLUSTER_MAX_N", "SKEW_FLOOR",
         "W_1D", "W_2D", "W_SEQ", "PCA_PATH", "PCA_MAX_K", "MAP_LANDMARKS")}
     vals.update(CLUSTER_AGREE_PCT=pct(shape.CLUSTER_AGREE), PCA_VAR_PCT=pct(shape.PCA_VAR),
                 PCA_W_SHAPE=shape.PCA_W["shape"], PCA_W_SKEW=shape.PCA_W["skew"], PCA_W_AMP=shape.PCA_W["amp"],
@@ -132,13 +132,6 @@ def _record_ref(r: dict) -> dict:
     return {"record_id": r["record_id"], "servername": r["servername"], "server_id": r["server_id"],
             "name": r["name"], "source": r["source"], "sig": r["sig"], "scan_enum": r["scan_enum"],
             "chuck_id": r.get("chuck_id") or "", "sensor_id": r.get("sensor_id") or "", "meta": r["meta"]}
-
-
-def _show_channel(features: Optional[dict]) -> Optional[str]:
-    """묶음을 그려 보일 채널 — 단면(또는 선 스캔의 곡선)이 있는 채널 중 이름 순 첫째. 한 묶음 안에서는 모두 같은 채널."""
-    chans = (features or {}).get("channels") or {}
-    keys = sorted(k for k, v in chans.items() if (v or {}).get("grid") or (v or {}).get("path"))
-    return keys[0] if keys else None
 
 
 def _category_out(cat: dict) -> dict:
@@ -350,10 +343,6 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
         """그 기록의 묶음 범위의 지도 투영식 — 결과가 없거나 범위의 기록이 너무 적었으면 None."""
         return store.run_map(int(run["id"]), shape.group_key(*shape.group_of(row))) if run else None
 
-    def baseline_of(run: Optional[dict], row: dict) -> Optional[dict]:
-        """그 기록의 묶음 범위에서 최신 결과가 뺀 「평소 어긋남」 — 화면도 묶음이 본 그대로 그린다 (SL-CLU-9)."""
-        return (proj_of(run, row) or {}).get("baseline")
-
     def run_out(set_name: str, method: str) -> Optional[dict]:
         run = store.latest_run(set_name, method)
         if run is None:
@@ -361,7 +350,7 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
         return {"id": run["id"], "method": run["method"], "created_at": run["created_at"],
                 "records": run["n_records"],
                 "clusters": run["n_clusters"], "unclustered": run["n_unclustered"],
-                "truncated": run["truncated"], "threshold": _r(run["threshold"]),
+                "truncated": run["truncated"],
                 "min_size": run["min_size"], "changes": run.get("changes"),
                 "stale": store.pool_changed_since(set_name=set_name, seq=int(run["pool_seq"]))}
 
@@ -378,8 +367,7 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
         groups: dict[int, list[dict]] = {}
         for m in store.run_members(run["id"]):
             groups.setdefault(int(m["cluster_no"]), []).append(m)
-        rep_feats = store.features_of([g[0]["record_id"] for g in groups.values()])
-        full_run = store.latest_run(set_name, method)
+        shapes = store.cluster_shapes(run["id"])
         out = []
         # 큰 묶음부터 — 번호는 이어받은 것이라 크기 순이 아니다(SL-CLU-13).
         for no, members in sorted(groups.items(), key=lambda t: (-len(t[1]), t[0])):
@@ -388,14 +376,10 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
                 continue
             cat = shape.cluster_category(
                 [labels.get((m["servername"], m["name"], m["source"]), []) for m in members], tree)
-            feats = rep_feats.get(rep["record_id"])
-            ch = _show_channel(feats)
             out.append({"cluster_no": no, "scan_enum": rep["scan_enum"], "chuck_id": rep["chuck_id"],
                         "sensor_id": rep["sensor_id"], "size": len(members),
-                        "min_score": _r(min(m["score"] for m in members)),
-                        "representative": _record_ref(rep), "channel": ch,
-                        "profile": shape.normalized_profiles(feats, [ch]).get(ch) if ch else None,
-                        "skew": shape.skew_profiles(feats or {}, baseline_of(full_run, rep)),
+                        "representative": _record_ref(rep),
+                        "shape": shape.thin_shape(shapes.get(no)),
                         **_category_out(cat)})
         return {"run": run, "pool": pool_total, "clusters": out, "job": job}
 
@@ -450,16 +434,17 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
         tree = store.tree()
         labels = store.labels_by_record(set_name=set_name)
         member_labels = [labels.get((m["servername"], m["name"], m["source"]), []) for m in members]
-        ch = _show_channel(members[0]["features"])
+        stored = store.cluster_shapes(int(run["id"]), [cluster_no]).get(cluster_no)
         return {
             "run_id": int(run["id"]), "method": method, "cluster_no": cluster_no,
             "scan_enum": members[0]["scan_enum"],
             "chuck_id": members[0]["chuck_id"], "sensor_id": members[0]["sensor_id"], "size": len(members),
-            "channel": ch, "skew": shape.skew_profiles(members[0]["features"], baseline_of(run, members[0])),
+            # 평균 그림 — 판과 함께 저장된 것, 0009 전의 판이면 여기서 낸다(SL-DRAW-2).
+            "shape": stored or shape.mean_shape(m["features"] for m in members),
             **_category_out(shape.cluster_category(member_labels, tree)),
             "members": [{**_record_ref(m), "score": _r(m["score"]), "representative": m["representative"],
                          "labels": _labels_out(tree, ids),
-                         "profile": shape.normalized_profiles(m["features"], [ch]).get(ch) if ch else None}
+                         "shape": shape.thin_shape(shape.mean_shape([m["features"]]))}
                         for m, ids in zip(members, member_labels)],
         }
 
@@ -530,11 +515,13 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
             if no is not None:
                 clusters.setdefault(no, []).append(p)
         cl_out = []
+        shapes = store.cluster_shapes(run_id, clusters.keys())
         for no, ps in sorted(clusters.items()):
             cat = shape.cluster_category(
                 [labels.get((m["servername"], m["name"], m["source"]), []) for m in ps], tree)["category"]
             cl_out.append({"cluster_no": no, "size": len(ps),
-                           "category": None if cat is None else cat["path"]})
+                           "category": None if cat is None else cat["path"],
+                           "shape": shape.thin_shape(shapes.get(no))})
         return {"run_id": run_id, "method": method,
                 "scan_enum": group[0], "chuck_id": group[1], "sensor_id": group[2],
                 "kinds": [{"scan_enum": k["scan_enum"], "chuck_id": k["chuck_id"], "sensor_id": k["sensor_id"],
@@ -567,6 +554,7 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
                "cluster_no": point["cluster_no"] if point else None,
                "run_id": int(run["id"]) if run else None, "method": method,
                "profiles": shape.normalized_profiles(r["features"], grid=True),
+               "draw": shape.draw_shape(r["features"]),
                "skew": shape.skew_profiles(r["features"], base),
                "pca": shape.pca_parts(pca, r["features"]) if pca else None, "vs": None}
         if vs_server_id is not None and vs_name and vs_source:
@@ -577,6 +565,7 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
                              shape.prepare_skew(feats, base), shape.prepare_skew(r["features"], base))),
                          "pca_similarity": None,
                          "profiles": shape.normalized_profiles(feats, grid=True),
+                         "draw": shape.draw_shape(feats),
                          "skew": shape.skew_profiles(feats, base)}
             if pca:
                 score = shape.pca_similarity(shape.pca_coords(pca, feats), shape.pca_coords(pca, r["features"]))

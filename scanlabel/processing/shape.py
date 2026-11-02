@@ -46,7 +46,7 @@ EVIDENCE_MIN = 0.60      # 근거 건수에 넣는 최소 점수
 LEVEL_TOP = 5            # 단계별 순위에 싣는 노드 수
 CASE_TOP = 5             # 유사 사례 목록에 싣는 사례 수
 
-CLUSTER_MIN = 0.80       # 묶음의 대표 기록과 편차 점수가 이 이상이어야 그 묶음의 구성원
+CLUSTER_K_MAX = 12       # 범위 하나를 자를 때 견주는 무리 수의 상한(2 … 이것) — 닮음 문턱이 아니다 (SL-CLU-2)
 SKEW_FLOOR = 0.10        # 채널 간 편차의 바닥(각 채널 표준편차 단위, RMS) — 이보다 작은 어긋남은 잡음으로 본다
 CLUSTER_MIN_SIZE = 3     # 이보다 작은 무리는 묶음이 아니다(「묶이지 않음」)
 CLUSTER_MAX_N = 800      # 묶음 범위(스캔 종류 · 척 · 센서) 하나에서 묶는 최대 기록 수(최근 것부터) — 쌍 비교가 n² 이다
@@ -942,6 +942,115 @@ def check_method(method: str) -> None:
         raise ValueError(f"묶음 잣대는 {', '.join(METHODS)} 중 하나: {method!r}")
 
 
+def _linkage(d: list[list[float]]) -> list[tuple[float, int, int]]:
+    """평균 연결 계층 묶기 — 합친 순서 `[(높이, 남는 자리, 사라지는 자리)…]` (SL-CLU-2).
+
+    NN-chain: 서로가 가장 가까운 두 무리를 합치고, 합친 무리와 나머지의 거리는 구성원 쌍 거리의 평균
+    (Lance–Williams). 평균 연결은 합친 높이가 줄지 않아(reducible) 높이 순으로 늘어놓으면 덴드로그램이 된다.
+    거리 행렬 한 장 위에서 O(n²). 동점은 낮은 번호 → 결정적이다.
+    """
+    n = len(d)
+    w = [row[:] for row in d]
+    size = [1] * n
+    alive = [True] * n
+    merges: list[tuple[float, int, int]] = []
+    chain: list[int] = []
+    left = n
+    while left > 1:
+        if not chain:
+            chain.append(next(i for i in range(n) if alive[i]))
+        a = chain[-1]
+        prev = chain[-2] if len(chain) > 1 else -1
+        row = w[a]
+        best, bd = prev, (row[prev] if prev >= 0 else math.inf)
+        for c in range(n):
+            if alive[c] and c != a and row[c] < bd:
+                best, bd = c, row[c]
+        if best != prev:
+            chain.append(best)
+            continue
+        chain.pop()
+        chain.pop()
+        lo, hi = min(a, best), max(a, best)
+        merges.append((bd, lo, hi))
+        na, nb = size[lo], size[hi]
+        rl, rh = w[lo], w[hi]
+        for c in range(n):
+            if alive[c] and c != lo and c != hi:
+                v = (na * rl[c] + nb * rh[c]) / (na + nb)
+                rl[c] = v
+                w[c][lo] = v
+        alive[hi] = False
+        size[lo] = na + nb
+        left -= 1
+    return sorted(merges, key=lambda m: m[0])         # 안정 정렬 — 같은 높이는 합친 순서대로
+
+
+def _cut(n: int, merges: list[tuple[float, int, int]], k: int) -> list[int]:
+    """덴드로그램을 무리 k 개로 자른다 — 기록마다 무리의 대표 자리(가장 작은 번호)."""
+    parent = list(range(n))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for _, a, b in merges[:n - k]:
+        ra, rb = find(a), find(b)
+        parent[max(ra, rb)] = min(ra, rb)
+    return [find(i) for i in range(n)]
+
+
+def _silhouette(d: list[list[float]], lab: list[int]) -> tuple[float, int]:
+    """평균 실루엣 — 기록마다 (가장 가까운 남의 무리까지 평균 거리 − 제 무리 평균 거리) / 둘 중 큰 것.
+
+    1 = 제 무리와는 붙고 남과는 멀다, 0 = 경계에 있다. **`CLUSTER_MIN_SIZE` 보다 작은 무리는 잡음**이다: 잡음 기록은 0 으로
+    평균에 들고(묶음을 잡음으로 흩으면 손해), 「가장 가까운 남의 무리」로는 세지 않는다 — 세면 동떨어진 기록 하나를 떼어
+    내는 갈림이 가장 좋아 보여 진짜 모양 갈래가 갈리지 않는다(2026-11-02, 실제 풀의 한 범위가 「303건 + 1건」으로
+    잘렸다). 반환 = (실루엣, 묶음이 될 무리 수). 묶음이 될 무리가 둘 미만이면 실루엣 0.
+    """
+    groups: dict[int, list[int]] = {}
+    for i, g in enumerate(lab):
+        groups.setdefault(g, []).append(i)
+    real = [(g, ms) for g, ms in groups.items() if len(ms) >= CLUSTER_MIN_SIZE]
+    if len(real) < 2:
+        return 0.0, len(real)
+    total = 0.0
+    for g, ms in real:
+        for i in ms:
+            get = d[i].__getitem__
+            a = sum(map(get, ms)) / (len(ms) - 1)
+            b = min(sum(map(get, other)) / len(other) for h, other in real if h != g)
+            m = max(a, b)
+            total += (b - a) / m if m > 0 else 0.0
+    return total / len(lab), len(real)
+
+
+def best_cut(d: list[list[float]]) -> tuple[list[int], int, float]:
+    """문턱 없이 자를 자리를 고른다 — 묶음이 될 무리(`CLUSTER_MIN_SIZE` 이상)가 2 … `CLUSTER_K_MAX` 개인 갈림 중
+    평균 실루엣이 가장 큰 것(동점은 적은 쪽).
+
+    「대표와 0.8 이상」 같은 닮음 문턱이 없다: 서로 가까운 것끼리 먼저 합치고, 무리 안은 붙고 무리 사이는 먼
+    자리에서 자른다(SL-CLU-2). 덴드로그램을 무리 2 … `4 × CLUSTER_K_MAX` 개로 잘라 보며, 작은 무리(잡음)는 세지도
+    재지도 않는다. 가장 나은 갈림도 실루엣이 0 이하면 가를 것이 없다는 뜻 — 한 무리(k = 1).
+    반환 = (기록마다 무리, 묶음이 될 무리 수, 그 실루엣).
+    """
+    n = len(d)
+    merges = _linkage(d)
+    best: Optional[tuple[float, int, list[int]]] = None
+    for k in range(2, min(4 * CLUSTER_K_MAX, n - 1) + 1):
+        lab = _cut(n, merges, k)
+        s, real = _silhouette(d, lab)
+        if real > CLUSTER_K_MAX:
+            break
+        if real >= 2 and (best is None or s > best[0] + 1e-12):
+            best = (s, real, lab)
+    # 어떤 갈림도 기록을 남보다 제 무리에 더 가깝게 두지 못하면(실루엣 ≤ 0 — 다 같은 모양) 범위 전체가 한 묶음.
+    if best is None or best[0] <= 1e-9:
+        return [0] * n, 1, 0.0
+    return best[2], best[1], best[0]
+
+
 def cluster(items: list[Mapping], method: str = "skew", *, models: Optional[Mapping] = None,
             previous: Optional[Mapping] = None) -> dict:
     """라벨과 무관하게 본 기록들을 모양으로 묶는다 (SL-CLU-2).
@@ -952,106 +1061,86 @@ def cluster(items: list[Mapping], method: str = "skew", *, models: Optional[Mapp
     차이가 원인의 차이가 아니다(SL-CLU-3).
 
     잣대는 `method` — **채널 간 편차**(`skew`, SL-CLU-9) 또는 **주성분**(`pca`, SL-CLU-10; `models` 는
-    범위 → `pca_model`, 없으면 여기서 낸다). 투영식에 놓이지 않는 기록은 「묶이지 않음」이다.
-    방법(대표 기록 묶음): 모든 쌍을 비교해
-    `CLUSTER_MIN` 이상인 이웃을 센다. 남은 기록 중 이웃이
-    가장 많은 것을 **대표**로 고르고, 그 대표와 `CLUSTER_MIN` 이상인 남은 기록을 한 묶음으로 뗀다.
-    묶음이 `CLUSTER_MIN_SIZE` 보다 작아지면 멈추고 나머지는 「묶이지 않음」이다. 구성원 모두가
-    **대표와 직접** 닮았으므로 한 묶음이 사슬처럼 늘어나 서로 다른 모양을 잇지 않는다.
-    결과는 결정적이다(동점은 이웃 점수 합, 그다음 id).
+    범위 → `pca_model`, 없으면 여기서 낸다). 누구와도 비교할 수 없는 기록은 「묶이지 않음」이다.
+
+    방법(문턱 없는 계층 묶기, 2026-11-02): 범위 안의 모든 쌍을 비교해 거리(1 − 점수, 비교할 수 없는 쌍은 1)를
+    내고, **평균 연결**로 가까운 무리부터 합친 뒤, 무리 수 2 … `CLUSTER_K_MAX` 중 **평균 실루엣**이 가장 큰
+    자리에서 자른다(`best_cut`). `CLUSTER_MIN_SIZE` 보다 작은 무리는 「묶이지 않음」이다. 대표 = 무리 안에서
+    나머지와의 거리 합이 가장 작은 기록(medoid), 구성원의 `score` = 대표와의 점수. 같은 풀이면 언제나 같은 결과다.
 
     `previous`(지난 판 — `{"clusters": [{"no", "representative", "members": [id…]}…], "next_no"}`)를 주면
-    **이어서 묶는다**(SL-CLU-13): 지난 묶음마다 대표(없으면 남은 구성원 중 이웃이 가장 많은 것)를 다시 세우고,
-    대표와 아직 `CLUSTER_MIN` 이상인 지난 구성원은 그 묶음에 남긴다. 그다음 남은 기록은 대표와 가장 닮은
-    이어받은 묶음에 합류한다(`CLUSTER_MIN` 이상일 때). `CLUSTER_MIN_SIZE` 보다 작아진 묶음은 풀고, 나머지로
-    처음처럼 새 묶음을 뗀다. 이어받은 묶음은 지난 **번호**(`no`)를 그대로, 새 묶음은 쓴 적 없는 번호를 받는다.
-    누가 몇 번 다시 묶어도 닮음이 그대로인 기록은 같은 번호에 남는다 — 결과가 사람마다 흔들리지 않게.
-    `changes` = 지난 판과 견준 기록 수(`shape.run_changes`).
+    **번호를 잇는다**(SL-CLU-13): 이번 묶음마다 지난 묶음과 겹치는 기록 수를 세어, 가장 많이 겹치는 짝부터
+    지난 번호를 물려준다(한 번호는 한 묶음에만). 나머지는 쓴 적 없는 번호를 받는다. 갈림은 풀만으로 정해지므로
+    아무것도 바뀌지 않았으면 다시 눌러도 같은 갈림 · 같은 번호다. `changes` = 지난 판과 견준 기록 수.
     """
     check_method(method)
     groups: dict[tuple[str, str, str], list[Mapping]] = {}
     for it in items:
         groups.setdefault(group_of(it), []).append(it)
-    prev = list((previous or {}).get("clusters") or [])
-    prev_by_rec = {m: p for p in prev for m in p["members"]}
 
     clusters: list[dict] = []
     unclustered: list = []
     for scan_enum, chuck_id, sensor_id in sorted(groups):
         group = groups[(scan_enum, chuck_id, sensor_id)]
         ids = [g["id"] for g in group]
-        at = {rid: i for i, rid in enumerate(ids)}
         model = None
         if method == "pca":
             gid = (scan_enum, chuck_id, sensor_id)
             model = models[gid] if models is not None and gid in models else pca_model(g["features"] for g in group)
         score = _scorer(group, method, model)
         n = len(group)
-        nb: list[dict[int, float]] = [{} for _ in range(n)]
+        sims: list[list[Optional[float]]] = [[None] * n for _ in range(n)]
         for i in range(n):
             for j in range(i + 1, n):
-                s = score(i, j)
-                if s is not None and s >= CLUSTER_MIN:
-                    nb[i][j] = s
-                    nb[j][i] = s
-        left = set(range(n))
-
-        def take(rep: int, near: set, no: Optional[int]) -> None:
+                sims[i][j] = sims[j][i] = score(i, j)
+        ok = [i for i in range(n) if any(sims[i][j] is not None for j in range(n) if j != i)]
+        okset = set(ok)
+        unclustered += [ids[i] for i in range(n) if i not in okset]
+        if len(ok) < CLUSTER_MIN_SIZE:
+            unclustered += [ids[i] for i in ok]
+            continue
+        dist = [[0.0 if i == j else (1.0 - sims[i][j] if sims[i][j] is not None else 1.0) for j in ok] for i in ok]
+        lab, _, _ = best_cut(dist)
+        parts: dict[int, list[int]] = {}
+        for p, g in enumerate(lab):
+            parts.setdefault(g, []).append(p)
+        for ps in parts.values():
+            if len(ps) < CLUSTER_MIN_SIZE:
+                unclustered += [ids[ok[p]] for p in ps]
+                continue
+            rep_p = min(ps, key=lambda p: (sum(dist[p][q] for q in ps), _order_key(ids[ok[p]])))
+            rep = ok[rep_p]
             members = [{"id": ids[rep], "score": 1.0, "representative": True}]
-            members += sorted(({"id": ids[j], "score": nb[rep][j], "representative": False} for j in near),
+            members += sorted(({"id": ids[ok[p]], "score": sims[rep][ok[p]] if sims[rep][ok[p]] is not None else 0.0,
+                                "representative": False} for p in ps if p != rep_p),
                               key=lambda m: (-m["score"], _order_key(m["id"])))
             clusters.append({"scan_enum": scan_enum, "chuck_id": chuck_id, "sensor_id": sensor_id,
-                             "representative": ids[rep], "members": members, "no": no})
-
-        # 1) 지난 묶음 이어받기 — 이 범위에 구성원이 남은 것만, 큰 것부터.
-        mine = {id(p): p for rid in ids if (p := prev_by_rec.get(rid)) is not None}
-        carried: list[tuple[dict, int, set]] = []
-        for p in sorted(mine.values(), key=lambda p: (-len(p["members"]), _order_key(p["no"]))):
-            old = [at[r] for r in p["members"] if r in at and at[r] in left]
-            if not old:
-                continue
-            rep = at.get(p["representative"])
-            if rep is None or rep not in left:
-                pool = set(old)
-                rep = max(old, key=lambda i: (len(nb[i].keys() & pool), sum(nb[i][j] for j in nb[i].keys() & pool),
-                                              -_order_key(ids[i])))
-            keep = {j for j in old if j != rep and j in nb[rep]}
-            carried.append((p, rep, keep))
-            left -= keep | {rep}
-        # 2) 남은 기록(새 기록 · 지난 판에 안 묶였던 기록)은 가장 닮은 이어받은 묶음에 합류한다.
-        for j in sorted(left, key=lambda i: _order_key(ids[i])):
-            best = max(((nb[rep][j], -k) for k, (_, rep, _) in enumerate(carried) if j in nb[rep]), default=None)
-            if best is not None:
-                carried[-best[1]][2].add(j)
-                left.discard(j)
-        # 3) 작아진 묶음은 푼다 — 그 구성원은 새 묶음의 재료로 돌아간다.
-        for p, rep, keep in carried:
-            if len(keep) + 1 < CLUSTER_MIN_SIZE:
-                left |= keep | {rep}
-            else:
-                take(rep, keep, p["no"])
-        # 4) 나머지로 처음처럼 새 묶음.
-        while left:
-            def density(i: int) -> tuple:
-                near = nb[i].keys() & left
-                return (len(near), sum(nb[i][j] for j in near), -_order_key(ids[i]))
-            rep = max(left, key=density)
-            near = nb[rep].keys() & left
-            if len(near) + 1 < CLUSTER_MIN_SIZE:
-                break
-            take(rep, near, None)
-            left -= near | {rep}
-        unclustered += [ids[i] for i in sorted(left)]
+                             "representative": ids[rep], "members": members, "no": None})
 
     clusters.sort(key=lambda c: (-len(c["members"]), c["scan_enum"], c["chuck_id"], c["sensor_id"],
                                  _order_key(c["representative"])))
-    # 번호 — 이어받은 묶음은 지난 번호, 새 묶음은 쓴 적 없는 번호(풀린 묶음의 번호도 다시 쓰지 않는다).
+    # 번호 — 지난 묶음과 가장 많이 겹치는 짝부터 지난 번호를, 나머지는 쓴 적 없는 번호(SL-CLU-13).
+    prev = list((previous or {}).get("clusters") or [])
+    prev_by_rec = {m: int(p["no"]) for p in prev for m in p["members"]}
+    pairs = []
+    for k, c in enumerate(clusters):
+        hits: dict[int, int] = {}
+        for m in c["members"]:
+            no = prev_by_rec.get(m["id"])
+            if no is not None:
+                hits[no] = hits.get(no, 0) + 1
+        pairs += [(-cnt, no, k) for no, cnt in hits.items()]
+    used_no: set[int] = set()
+    for _, no, k in sorted(pairs):
+        if clusters[k]["no"] is None and no not in used_no:
+            clusters[k]["no"] = no
+            used_no.add(no)
     next_no = max([int((previous or {}).get("next_no") or 1)] + [int(p["no"]) + 1 for p in prev])
     for c in clusters:
         if c["no"] is None:
             c["no"] = next_no
             next_no += 1
-    out = {"clusters": clusters, "unclustered": unclustered, "next_no": next_no}
+    out = {"clusters": clusters, "unclustered": sorted(unclustered, key=_order_key), "next_no": next_no}
     out["changes"] = run_changes(previous, out) if previous is not None else None
     return out
 
@@ -1077,6 +1166,104 @@ def run_changes(previous: Optional[Mapping], result: Mapping) -> dict:
         "new_clusters": len(new_nos - old_nos),
         "closed_clusters": len(old_nos - new_nos),
     }
+
+
+
+# ─── 그림 (SL-DRAW) — poc_viewer 의 「경로 겹쳐 보기」 · 「실공간 맵」과 같은 재료 ──────────────────
+
+DRAW_THIN = 64           # 목록 · 지도에 싣는 평균 곡선의 점 수 — 상세는 PATH_N 그대로
+
+
+def draw_shape(features: Mapping) -> dict:
+    """그림용 한 기록 — 채널마다 **측정 순서 곡선**(`path`, PATH_N 점)과 **칸**(`grid`, 행 = Z 아래부터 · 열 = X).
+
+    poc_viewer 대시보드의 두 그림(「경로 겹쳐 보기」 = 측정 순서대로 본 값, 「실공간 맵」 = X–Z 평면의 값)을 스냅샷에서
+    그대로 줄인 것이다. 값은 **그 채널 점 전체의 평균 · 표준편차로 정규화**(SL-CLU-9 의 정규화와 같다) — 기록마다
+    크기와 바탕이 달라 원래 값으로는 평균을 낼 수 없고, 채널끼리 한 자에 겹쳐 그리면 어디서 갈라지는지가 보인다.
+    평평한 채널은 0 선. 빈 자리는 None.
+    """
+    out: dict[str, dict] = {}
+    for key in sorted((features.get("channels") or {})):
+        ch = features["channels"][key] or {}
+        st = ch.get("stats") or {}
+        mu, sd = st.get("mean"), st.get("std")
+        if mu is None:
+            continue
+
+        def f(v: Optional[float], mu: float = mu, sd: Optional[float] = sd) -> Optional[float]:
+            if v is None:
+                return None
+            return round((v - mu) / sd, 3) if sd and sd > 0 else 0.0
+        path = [f(v) for v in ch.get("path") or []]
+        grid = [f(v) for v in ch["grid"]] if ch.get("grid") else None
+        if path or grid:
+            out[key] = {"path": path or None, "grid": grid}
+    return out
+
+
+def _quantile(sorted_vals: list[float], q: float) -> float:
+    pos = q * (len(sorted_vals) - 1)
+    lo = int(pos)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    return sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * (pos - lo)
+
+
+def mean_shape(features_list: Iterable[Mapping]) -> dict:
+    """묶음의 평균 그림 — 구성원마다 `draw_shape` 한 것을 자리마다 평균 (SL-DRAW-2).
+
+    채널마다 `path` = 평균 곡선, `lo` · `hi` = 그 자리의 25 · 75 백분위(구성원 절반이 드는 띠 — 묶음이 얼마나
+    고른가), `grid` = 칸마다 평균. 구성원 절반 이상에 있는 채널만. `n` = 구성원 수.
+    """
+    shapes = [draw_shape(f) for f in features_list]
+    n = len(shapes)
+    counts: dict[str, int] = {}
+    for s in shapes:
+        for k in s:
+            counts[k] = counts.get(k, 0) + 1
+    channels: dict[str, dict] = {}
+    for key in sorted(k for k, c in counts.items() if 2 * c >= n):
+        paths = [s[key]["path"] for s in shapes if key in s and s[key]["path"] and len(s[key]["path"]) == PATH_N]
+        grids = [s[key]["grid"] for s in shapes if key in s and s[key]["grid"]]
+        mean_p: Optional[list] = None
+        lo: Optional[list] = None
+        hi: Optional[list] = None
+        if paths:
+            mean_p, lo, hi = [], [], []
+            for j in range(PATH_N):
+                vals = sorted(p[j] for p in paths if p[j] is not None)
+                if not vals:
+                    mean_p.append(None), lo.append(None), hi.append(None)
+                    continue
+                mean_p.append(round(sum(vals) / len(vals), 3))
+                lo.append(round(_quantile(vals, 0.25), 3))
+                hi.append(round(_quantile(vals, 0.75), 3))
+        mean_g: Optional[list] = None
+        if grids:
+            mean_g = []
+            for j in range(GRID_N * GRID_N):
+                vals = [g[j] for g in grids if g[j] is not None]
+                mean_g.append(round(sum(vals) / len(vals), 3) if vals else None)
+        if mean_p or mean_g:
+            channels[key] = {"path": mean_p, "lo": lo, "hi": hi, "grid": mean_g}
+    return {"n": n, "channels": channels}
+
+
+def thin_shape(shape_: Optional[Mapping], n: int = DRAW_THIN) -> Optional[dict]:
+    """목록 · 지도용 — 평균 곡선만 `n` 점으로(구간 평균), 띠 · 칸은 뺀다."""
+    if not shape_:
+        return None
+    out = {}
+    for key, ch in (shape_.get("channels") or {}).items():
+        p = ch.get("path")
+        if not p:
+            continue
+        k = len(p) / n
+        thin = []
+        for j in range(n):
+            seg = [v for v in p[int(j * k):max(int((j + 1) * k), int(j * k) + 1)] if v is not None]
+            thin.append(round(sum(seg) / len(seg), 3) if seg else None)
+        out[key] = {"path": thin}
+    return {"n": shape_.get("n"), "channels": out}
 
 
 # ─── 묶음 지도 (2D) ──────────────────────────────────────────────────────────

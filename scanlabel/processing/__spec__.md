@@ -15,7 +15,7 @@ needs a stored fact, the caller passes it in (`Tree`, `candidates`, `member_labe
 ### `shape.py` — shape features, similarity, ranking, clusters, map, evaluation
 - **Every threshold and weight is a module constant here and nowhere else** (`SL-SUG-4` · `SL-CLU-7`):
   `FEATURE_VERSION` · `PATH_N` · `GRID_N` · `MIN_OVERLAP` · `PROFILE_MIN` · `FLAT_REL` · `W_1D`/`W_2D` · `SUGGEST_MIN` · `MARGIN`
-  · `EVIDENCE_MIN` · `LEVEL_TOP` · `CASE_TOP` · `CLUSTER_MIN` · `SKEW_FLOOR` · `CLUSTER_MIN_SIZE` · `CLUSTER_MAX_N` ·
+  · `EVIDENCE_MIN` · `LEVEL_TOP` · `CASE_TOP` · `CLUSTER_K_MAX` · `DRAW_THIN` · `SKEW_FLOOR` · `CLUSTER_MIN_SIZE` · `CLUSTER_MAX_N` ·
   `CLUSTER_AGREE` · `MAP_LANDMARKS`. A change to one is a behaviour change: run `jobs eval` on the real labels
   and put the numbers in the commit message.
 - Features: `num` (poc_viewer's `num()` rule) · `channel_features` · `record_features` (the snapshot, before

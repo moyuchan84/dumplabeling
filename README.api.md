@@ -167,14 +167,13 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
 
 ```json
 { "run": { "id": 4, "method": "skew", "created_at": "2026-10-15T11:40:02+09:00", "records": 312, "clusters": 9,
-           "unclustered": 41, "truncated": 0, "threshold": 0.8, "min_size": 3, "stale": false },
+           "unclustered": 41, "truncated": 0, "min_size": 3, "stale": false },
   "pool": 312,
   "clusters": [
-    { "cluster_no": 1, "scan_enum": "FINEHORVERT_SCAN", "chuck_id": "CH1", "sensor_id": "2", "size": 58, "min_score": 0.81,
+    { "cluster_no": 1, "scan_enum": "FINEHORVERT_SCAN", "chuck_id": "CH1", "sensor_id": "2", "size": 58,
       "representative": { "record_id": 12, "servername": "scanner-a", "server_id": 1, "name": "…",
                           "source": "…", "sig": "…", "scan_enum": "…", "meta": { … } },
-      "channel": "A", "profile": { "x": [ … 16개 ], "z": [ … 16개 ] },
-      "skew": { "tr": { "x": [ … 16개 ], "z": [ … 16개 ], "line": [ … 128개 ] }, "txh": { … }, "tyh": { … } },
+      "shape": { "n": 58, "channels": { "tr": { "path": [ … 64개 ] }, "txh": { … }, "tyh": { … } } },
       "labelled": 6, "unlabelled": 52,
       "levels": { "1": [ { "label_id": 1, "path": "신호 이상", "count": 6, "share": 1.0, "case_id": null, "agreed": true } ], "2": [ … ], "3": [ … ] },
       "category": { "label_id": 3, "level": 3, "path": "…", "count": 5, "share": 0.833, "case_id": 1, "agreed": true } } ] }
@@ -183,13 +182,17 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
 - 아직 묶은 적이 없으면 `run: null` · `clusters: []`. `pool` 은 지금 풀의 기록 수.
 - `stale: true` = 묶은 뒤에 풀에 새 기록이 들어왔거나 모양이 바뀌었다 — 「다시 묶기」를 권할 자리. 같은 파일을
   다시 연 것은 바뀐 것이 아닙니다.
-- 다시 묶으면 **지난 판을 이어서** 묶습니다(SL-CLU-13) — 대표와 여전히 닮은 구성원은 같은 묶음 번호에 남고, 새 기록은
-  닮은 묶음에 합류하고, 새 묶음은 쓴 적 없는 번호를 받습니다. 그래서 번호는 크기 순이 아니고, 목록은 큰 묶음부터 옵니다.
+- 묶기에는 **닮음 문턱이 없습니다**(SL-CLU-2, 2026-11-02): 범위마다 가까운 것끼리 평균 연결로 합치고, 묶음이 될(3건 이상) 무리 2 … 12개 중
+  무리가 가장 또렷이 갈리는(평균 실루엣이 가장 큰) 자리에서 자릅니다. 3건보다 작은 무리는 「묶이지 않음」.
+- 다시 묶으면 **번호를 잇습니다**(SL-CLU-13) — 이번 묶음마다 지난 판의 묶음과 겹치는 기록 수를 세어 가장 많이 겹치는 짝부터
+  지난 번호를 물려받고, 나머지는 쓴 적 없는 번호를 받습니다. 아무것도 바뀌지 않았으면 같은 갈림 · 같은 번호입니다. 그래서
+  번호는 크기 순이 아니고, 목록은 큰 묶음부터 옵니다.
   `run.id` 는 판마다 새로 납니다. `run.changes` = 지난 판과 견준 기록 수 `{ "kept", "moved", "joined", "released", "out",
   "new_clusters", "closed_clusters" }`(처음 묶은 판은 `null`).
 - 범위마다 **라벨된 기록은 전부**, 라벨 없는 기록은 최근 것부터 800건까지 묶습니다(SL-CLU-12). `truncated` 는 잘린 라벨 없는 기록 수.
-- `min_score` · 구성원의 `score` 는 대표와의 **채널 간 편차 점수**입니다. `skew` 는 대표 기록의 채널별 편차 곡선(기준선을 뺀 것,
-  채널 표준편차 단위) — 채널이 하나뿐이면 `{}`. `profile` 은 지금처럼 `channel` 하나의 모양입니다.
+- `shape` = 묶음의 **평균 그림**(SL-DRAW-2) — 구성원마다 채널의 측정 순서 곡선(poc_viewer 「경로 겹쳐 보기」의 재료)을 그 채널의
+  평균 · 표준편차로 정규화해 자리마다 평균한 것. 목록 · 지도에는 64점으로 줄인 평균 곡선만, 묶음 상세(`GET /clusters/{no}`)에는
+  128점 곡선 + 25–75% 띠(`lo` · `hi`) + 16×16 칸 평균(`grid`)이 옵니다. 0009 전에 묶은 판은 `null`(상세는 그 자리에서 냅니다).
 
 ### `POST /clusters/run` · `{ "set_name": "dump" }`
 
@@ -216,7 +219,8 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
   "kinds": [ { "scan_enum": "FINEHORVERT_SCAN", "chuck_id": "CH1", "sensor_id": "2", "n": 800 },
              { "scan_enum": "FINEHORVERT_SCAN", "chuck_id": "CH2", "sensor_id": "2", "n": 412 } ],
   "points": [ { "id": 12, "x": -0.2573, "y": 0.1102, "c": 2, "l": true } ],
-  "clusters": [ { "cluster_no": 2, "size": 534, "category": "ID-0603 › WS › IFM-MIOB" } ],
+  "clusters": [ { "cluster_no": 2, "size": 534, "category": "ID-0603 › WS › IFM-MIOB",
+                  "shape": { "n": 534, "channels": { "A": { "path": [ … 64개 ] }, "B": { … } } } } ],
   "target": { "x": 0.5604, "y": 0.0, "cluster_no": null, "record_id": 1, "in_run": false },
   "target_kind": "FINEHORVERT_SCAN", "target_chuck": "CH1", "target_sensor": "2", "axes": null }
 ```
@@ -235,6 +239,7 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
   측정 순서 `line`, 선: `line`)의 무게 곡선 — 큰 자리일수록 그 축을 따라 기록이 갈린다. 칸은 몫에만 들어갑니다.
 
 - 점 = `id`(풀의 기록 id — `GET /records/{id}`) · 자리 · `c` 묶음 번호(묶이지 않음 = `null`) · `l` 라벨 있음.
+- 묶음마다 `shape` = 목록과 같은 줄인 평균 곡선 — 화면이 지도의 묶음 옆에 그립니다.
 - `target.in_run: false` = 이번 묶음 뒤에 본 기록이거나 상한에 걸려 빠진 기록 — 같은 투영식으로 놓았고 묶음 번호는 없다.
   그 기록의 범위가 고른 지도와 다르면 `target: null`(`target_kind` · `target_chuck` · `target_sensor` 로 알 수 있다).
 - `has_map: false` = 0006 이전에 묶은 결과(지도가 척 없이 나뉘었다)이거나 그 범위의 기록이 너무 적었다 — 다시 묶으면
@@ -255,12 +260,17 @@ scanlabel 이 fleet 에서 그 기록을 **캐시로만** 읽어(`source:"cache"
   "chuck_id": "CH1", "sensor_id": "2", "pca": null,
   "profiles": { "A": { "x": [ … 16개 ], "z": [ … 16개 ], "grid": [ … 256개 ] } },
   "skew": { "A": { "x": [ … 16개 ], "z": [ … 16개 ], "line": [ … 128개 ] }, "B": { … } },
+  "draw": { "A": { "path": [ … 128개 ], "grid": [ … 256개 ] }, "B": { … } },
   "vs": { "similarity": { "score": 0.88, "d1": 0.85, "d2": 0.9, "scale": 1.3, "by_channel": { … } },
           "skew_similarity": { "score": 0.83, "d1": 0.8, "d2": 0.86, "dx": 0.78, "dz": 0.82, "dp": 0.71, "channels": [ "A", "B" ] },
           "pca_similarity": null,
           "profiles": { "A": { "x": [ … ], "z": [ … ], "grid": [ … ] } },
-          "skew": { "A": { "x": [ … ], "z": [ … ] }, "B": { … } } } }
+          "skew": { "A": { "x": [ … ], "z": [ … ] }, "B": { … } },
+          "draw": { "A": { "path": [ … ], "grid": [ … ] }, "B": { … } } } }
 ```
+
+`draw` = 그림용 한 기록(SL-DRAW-1) — 채널마다 측정 순서 곡선(128점)과 칸(256개, 행 = Z 아래부터 · 열 = X)을 그 채널 점의
+평균 · 표준편차로 정규화한 것. 묶음의 평균 그림(`shape`)과 같은 재료라 나란히 그릴 수 있습니다.
 
 `method=pca` 면 `cluster_no` · `run_id` 가 주성분 결과의 것이고, `pca` = 이 기록이 범위의 평소와 얼마나(`distance`, 값 하나당
 RMS) · 어디서(`parts`, (재료, 채널)별 몫) 다른지, `vs.pca_similarity` = `{ "score": 0.86 }`(주성분 점수). 범위의 채널 집합과
@@ -270,15 +280,16 @@ RMS) · 어디서(`parts`, (재료, 채널)별 몫) 다른지, `vs.pca_similarit
 
 ### `GET /clusters/{cluster_no}?set_name=dump&run_id=&method=skew`
 
-묶음 하나의 구성원 — 대표 먼저, 그다음 대표와의 점수 순. 구성원마다 `labels`(붙은 라벨)와 겹쳐 그릴 `profile`
-(묶음의 `channel` 의 X · Z 단면).
+묶음 하나의 구성원 — 대표(나머지와 가장 가까운 기록) 먼저, 그다음 대표와의 점수 순. 묶음의 평균 그림 `shape`(띠와 칸까지)와,
+구성원마다 `labels`(붙은 라벨) · `shape`(그 기록 하나의 줄인 곡선).
 
 ```json
-{ "run_id": 4, "method": "skew", "cluster_no": 2, "scan_enum": "…", "size": 17, "channel": "A",
+{ "run_id": 4, "method": "skew", "cluster_no": 2, "scan_enum": "…", "size": 17,
+  "shape": { "n": 17, "channels": { "A": { "path": [ … 128개 ], "lo": [ … ], "hi": [ … ], "grid": [ … 256개 ] } } },
   "labelled": 5, "unlabelled": 12, "levels": { … }, "category": { … },
   "members": [ { "record_id": 12, "servername": "…", "server_id": 1, "name": "…", "source": "…", "sig": "…",
                  "scan_enum": "…", "meta": { … }, "score": 1.0, "representative": true,
-                 "labels": [ … ], "profile": { "x": [ … ], "z": [ … ] } } ] }
+                 "labels": [ … ], "shape": { "n": 1, "channels": { "A": { "path": [ … 64개 ] } } } } ] }
 ```
 
 `run_id` 가 그 잣대의 최신 결과와 다르면 422(「그새 묶음이 다시 계산됐다」), 묶은 적이 없거나 없는 번호면 404.

@@ -176,16 +176,17 @@ sequenceDiagram
         <text x="540" y="22" text-anchor="middle">묶이지 않음</text>
         <text x="540" y="150" text-anchor="middle" class="faint">이웃 1건뿐 → 3건 미만</text>
       </svg>
-      <figcaption>점선 원 = 대표와 0.8 이상인 범위. 구성원끼리는 0.8 미만일 수 있지만, 모두 대표와는 직접 닮았습니다.</figcaption>
+      <figcaption>2026-11-02 까지의 방식(대표와 0.8 이상) 그림입니다. 지금은 아래 문턱 없는 계층 묶기입니다 — SPEC <code>SL-CLU-2</code>.</figcaption>
     </figure>
     <ol class="steps">
-      <li><div>범위 안 모든 쌍의 점수를 내고, 0.8(<code>CLUSTER_MIN</code>) 이상인 짝을 <b>이웃</b>으로 적습니다.</div></li>
-      <li><div>남은 기록 중 이웃이 가장 많은 것을 <b>대표</b>로 고릅니다(동점이면 이웃 점수 합, 그다음 id).</div></li>
-      <li><div>대표 + 그 대표의 남은 이웃을 한 묶음으로 떼어 냅니다.</div></li>
-      <li><div>대표의 남은 이웃까지 3건(<code>CLUSTER_MIN_SIZE</code>) 미만이 될 때까지 반복합니다. 남은 것은 「묶이지 않음」입니다.</div></li>
-      <li><div>묶음 번호는 큰 묶음부터 1, 2, 3…</div></li>
+      <li><div>범위 안 모든 쌍의 점수를 내고 거리 = 1 − 점수(비교할 수 없는 쌍은 1)의 행렬을 만듭니다.</div></li>
+      <li><div><b>평균 연결</b>로 가장 가까운 무리부터 합칩니다(<code>shape._linkage</code>, NN-chain). 무리 사이 거리 = 구성원 쌍 거리의 평균.</div></li>
+      <li><div>묶음이 될(3건 이상) 무리가 2 … <code>CLUSTER_K_MAX</code>(12)개인 자리들에서 잘라 보고 <b>평균 실루엣</b>(3건 미만 자투리는 0 으로, 이웃 무리로는 안 셈)이 가장 큰 자리에서 자릅니다(<code>shape.best_cut</code>). 어디서 잘라도 0 이하면 범위 전체가 한 묶음.</div></li>
+      <li><div>3건(<code>CLUSTER_MIN_SIZE</code>) 미만 무리는 「묶이지 않음」. 대표 = 무리 안에서 나머지와 거리 합이 가장 작은 기록(medoid).</div></li>
+      <li><div>번호는 지난 판과 가장 많이 겹치는 묶음이 물려받고, 나머지는 쓴 적 없는 번호(<code>SL-CLU-13</code>).</div></li>
+      <li><div>묶음마다 평균 그림(<code>shape.mean_shape</code>)을 <code>cluster_shapes</code> 에 저장합니다(<code>SL-DRAW-2</code>).</div></li>
     </ol>
-    <p>사슬 묶기(A~B, B~C 이면 A·C 도 같이)는 쓰지 않습니다. 모양이 전혀 다른 A 와 C 가 B 를 거쳐 한 묶음이 되기 때문입니다.</p>
+    <p>점수 문턱이 없습니다 — 사용자 요청(2026-11-02): 「꼭 0.8이라는 숫자로 제약을 안걸어도 좋을거같은데」. 평균 연결은 단일 연결과 달리 A~B~C 사슬 하나로 먼 무리를 잇지 않습니다.</p>
     <div class="plane">
       <h3>묶음의 분류(카테고리)</h3>
       <p>라벨된 구성원의 라벨을 단계(대·중·소)별로 셉니다. 소분류 라벨은 그 중분류·대분류의 표이기도 합니다. 한 단계의 1위가 <b>라벨된 구성원의 60% 이상</b>이고, 2위보다 많고, 바로 위 단계 합의 노드의 자식이면 그 단계는 「합의」입니다. 합의된 가장 깊은 단계가 묶음의 분류이고, 라벨된 구성원이 없으면 분류도 없습니다.</p>

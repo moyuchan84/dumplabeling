@@ -221,7 +221,7 @@ def test_clusters_group_like_shapes_and_leave_the_rest_unclustered():
     assert sorted(out["unclustered"]) == [20, 21]
     first = out["clusters"][0]
     assert first["members"][0]["representative"] is True and first["members"][0]["score"] == 1.0
-    assert all(m["score"] >= shape.CLUSTER_MIN for m in first["members"])
+    assert all(m["score"] > 0.8 for m in first["members"])            # 대표와 직접 닮았다
 
 
 def test_clusters_never_mix_scan_kinds():
@@ -277,7 +277,7 @@ def test_skew_compares_where_channels_part_not_the_shared_shape():
     assert shape.skew_similarity(p["r5"], p["r6"])["score"] > 0.9
     assert shape.skew_similarity(p["n0"], p["n1"])["score"] > 0.9     # 평소끼리 — 어긋남이 없다
     assert shape.skew_similarity(p["r5"], p["l8"])["score"] < 0.3     # 바탕은 같아도 어긋나는 자리가 다르다
-    assert shape.skew_similarity(p["r5"], p["n0"])["score"] < shape.CLUSTER_MIN - 0.1   # 좁은 어긋남은 바닥에 묽어진다
+    assert shape.skew_similarity(p["r5"], p["n0"])["score"] < 0.7   # 좁은 어긋남은 바닥에 묽어진다
     assert shape.similarity(recs[5][1], recs[8][1])["score"] > 0.8    # 모양 유사도로는 가르지 못한다
     assert shape.skew_similarity(p["r5"], p["l8"])["channels"] == ["tr", "txh", "tyh"]
 
@@ -333,7 +333,7 @@ def test_an_area_scans_skew_also_reads_the_scan_order_curve():
     p = [shape.prepare_skew(f, base) for f in recs]
     h_v = shape.skew_similarity(p[5], p[8])
     assert h_v["d2"] > 0.9 and h_v["d1"] > 0.9                     # 칸 · 단면은 같다고 본다
-    assert h_v["dp"] < 0.3 and h_v["score"] < shape.CLUSTER_MIN    # 측정 순서가 가른다
+    assert h_v["dp"] < 0.3 and h_v["score"] < 0.8    # 측정 순서가 가른다
     assert shape.skew_similarity(p[5], p[6])["score"] > 0.9
     prof = shape.skew_profiles(recs[5], base)
     assert len(prof["txh"]["line"]) == shape.PATH_N and len(prof["txh"]["x"]) == shape.GRID_N
@@ -473,7 +473,7 @@ def test_pca_scores_like_skew_and_needs_the_scopes_channel_set():
     recs = [f for _, f in pca_scope()]
     model = shape.pca_model(recs)
     c = [shape.pca_coords(model, f) for f in recs]
-    assert shape.pca_similarity(c[5], c[6]) > shape.CLUSTER_MIN
+    assert shape.pca_similarity(c[5], c[6]) > 0.8
     assert shape.pca_similarity(c[5], c[8]) < 0.3                    # 바탕은 같아도 어긋나는 자리가 다르다
     assert shape.pca_similarity(c[5], None) is None
     drop = {"version": recs[0]["version"], "channels": {k: v for k, v in recs[0]["channels"].items() if k != "tyh"}}
@@ -544,3 +544,67 @@ def test_a_fresh_run_ignores_the_previous_partition_but_not_its_numbers():
     first = shape.cluster(items)
     fresh = shape.cluster(items, previous={"next_no": first["next_no"], "clusters": []})
     assert [c["no"] for c in fresh["clusters"]] == [first["next_no"]]
+
+
+# ─── 문턱 없는 묶기 (SL-CLU-2, 2026-11-02) ───────────────────────────────────
+
+def _blobs(sizes, within, between):
+    """무리마다 `within`, 무리 사이 `between` 인 거리 행렬 — 점수로는 1 − 거리."""
+    lab = [g for g, n in enumerate(sizes) for _ in range(n)]
+    return [[0.0 if i == j else within if lab[i] == lab[j] else between for j in range(len(lab))]
+            for i in range(len(lab))], lab
+
+
+def test_clusters_need_no_similarity_threshold():
+    # 무리 안 점수가 0.5 뿐이어도(예전 문턱 0.8 아래) 무리 사이(점수 −0.2)보다 가까우면 묶인다
+    d, lab = _blobs([4, 3, 5], within=0.5, between=1.2)
+    got, k, sil = shape.best_cut(d)
+    assert k == 3 and sil > 0
+    assert [len({got[i] for i, g in enumerate(lab) if g == want}) for want in range(3)] == [1, 1, 1]
+    assert len(set(got)) == 3
+
+
+def test_a_group_of_alike_records_stays_one_cluster():
+    # 가를 것이 없으면(어떤 갈림도 실루엣 ≤ 0) 범위 전체가 한 묶음 — 3건이어도
+    d, _ = _blobs([5], within=0.1, between=0.1)
+    assert shape.best_cut(d)[1] == 1
+    out = shape.cluster([item(i, synth.peak(), gain=1.0 + i) for i in range(1, 4)])
+    assert [sorted(m["id"] for m in c["members"]) for c in out["clusters"]] == [[1, 2, 3]]
+
+
+def test_never_splits_into_more_than_the_cap():
+    d, _ = _blobs([3] * (shape.CLUSTER_K_MAX + 4), within=0.1, between=1.0)
+    assert shape.best_cut(d)[1] <= shape.CLUSTER_K_MAX
+
+
+# ─── 그림 (SL-DRAW) ──────────────────────────────────────────────────────────
+
+def test_the_drawing_is_normalised_per_channel_like_the_dashboards_two_figures():
+    a = shape.draw_shape(feats(synth.peak()))
+    b = shape.draw_shape(feats(synth.peak(), gain=7.5, offset=-300.0))
+    assert set(a) == {"A", "B"} and len(a["A"]["path"]) == shape.PATH_N
+    assert len(a["A"]["grid"]) == shape.GRID_N * shape.GRID_N
+    assert all(abs(x - y) < 1e-2 for x, y in zip(a["A"]["path"], b["A"]["path"]))   # 크기 · 바탕은 지워진다
+    assert all(abs(x - y) < 1e-2 for x, y in zip(a["A"]["grid"], b["A"]["grid"]) if x is not None)
+
+
+def test_a_clusters_mean_shape_is_the_members_average_with_a_band():
+    fs = [feats(synth.peak(w=w)) for w in (0.06, 0.08, 0.10, 0.12)]
+    m = shape.mean_shape(fs)
+    ch = m["channels"]["A"]
+    assert m["n"] == 4 and len(ch["path"]) == len(ch["lo"]) == len(ch["hi"]) == shape.PATH_N
+    assert all(lo <= v <= hi for lo, v, hi in zip(ch["lo"], ch["path"], ch["hi"]))
+    each = [shape.draw_shape(f)["A"]["path"] for f in fs]
+    assert abs(ch["path"][40] - sum(p[40] for p in each) / 4) < 1e-2
+    thin = shape.thin_shape(m)
+    assert len(thin["channels"]["A"]["path"]) == shape.DRAW_THIN and "lo" not in thin["channels"]["A"]
+
+
+def test_a_stray_record_does_not_decide_the_cut():
+    # 두 모양 갈래(안 0.3 · 사이 0.9) + 어디와도 먼 기록 하나 — 그 하나를 떼는 갈림이 아니라 두 갈래로 자른다
+    d, lab = _blobs([6, 5], within=0.3, between=0.9)
+    d = [row + [2.0] for row in d] + [[2.0] * len(d) + [0.0]]
+    got, k, _ = shape.best_cut(d)
+    assert k == 2
+    assert len({got[i] for i in range(6)}) == 1 and len({got[i] for i in range(6, 11)}) == 1
+    assert got[0] != got[6] and got[11] not in (got[0], got[6])     # 떨어진 하나는 따로(→ 「묶이지 않음」)
