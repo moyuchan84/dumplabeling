@@ -115,3 +115,17 @@ def test_migrations_sit_next_to_their_runner():
 @pytest.mark.parametrize("area", AREAS)
 def test_every_area_has_its_spec(area):
     assert (ROOT / area / "__spec__.md").exists(), f"{area}/__spec__.md is the area's reference doc"
+
+
+def test_served_html_lives_in_application_web():
+    """The pages the server hands out sit together in `application/web/`; no stray .html among the code."""
+    stray = sorted(str(p.relative_to(ROOT)) for p in ROOT.rglob("*.html") if "web" not in p.relative_to(ROOT).parts[:2])
+    assert not stray, f"html outside application/web/: {stray}"
+    assert {p.name for p in (ROOT / "application" / "web").glob("*.html")} >= {"guide.html", "guide_flow.html"}
+
+
+def test_routes_do_not_build_their_own_connections():
+    """`api.py` assembles; each router receives the shared `Ctx` instead of opening a Store or Fleet itself."""
+    offenders = [p.name for p in (ROOT / "application" / "routes").glob("*.py")
+                 if re.search(r"\b(Store|Fleet|FileCache)\(", p.read_text(encoding="utf-8")) and p.name != "context.py"]
+    assert not offenders, f"routers constructing their own clients: {offenders}"

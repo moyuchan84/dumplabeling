@@ -12,8 +12,11 @@ needs a stored fact, the caller passes it in (`Tree`, `candidates`, `member_labe
 
 ## Per-file responsibilities
 
-### `shape.py` — shape features, similarity, ranking, clusters, map, evaluation
-- **Every threshold and weight is a module constant here and nowhere else** (`SL-SUG-4` · `SL-CLU-7`):
+### `shape/` — shape features, similarity, ranking, clusters, map, evaluation (a package)
+- Modules, in dependency order: `constants` ← `features` ← `similarity` ← `skew` ← `pca` ← `ranking` ← `clustering` ←
+  `drawing` ← `cluster_map` ← `evaluation` ← `walkthrough`. `shape/__init__.py` re-exports every name, so callers keep
+  writing `shape.rank(...)` / `shape.PATH_N`. A new tunable goes in `constants.py`; a new function in the module of its topic.
+- **Every threshold and weight is a module constant here and nowhere else** (`SL-SUG-4` · `SL-CLU-7`; defined in `shape/constants.py`):
   `FEATURE_VERSION` · `PATH_N` · `GRID_N` · `MIN_OVERLAP` · `PROFILE_MIN` · `FLAT_REL` · `W_1D`/`W_2D` · `SUGGEST_MIN` · `MARGIN`
   · `EVIDENCE_MIN` · `LEVEL_TOP` · `CASE_TOP` · `CLUSTER_K_MAX` · `DRAW_THIN` · `SKEW_FLOOR` · `CLUSTER_MIN_SIZE` · `CLUSTER_MAX_N` ·
   `CLUSTER_AGREE` · `MAP_LANDMARKS`. A change to one is a behaviour change: run `jobs eval` on the real labels
@@ -50,7 +53,7 @@ needs a stored fact, the caller passes it in (`Tree`, `candidates`, `member_labe
 - **Decision:** `processing/` is stdlib-only; `math.sumprod` carries the n² comparison (800 records ≈ 6 s).
 - **Reason:** nothing here needs an extension a closed-network host may not carry; purity is also what makes
   `jobs eval` and the tests DB-free.
-- **Rejected:** numpy from the start (`SL-X-6`: not needed at this size; `shape.py` is the only file that would
+- **Rejected:** numpy from the start (`SL-X-6`: not needed at this size; `processing/shape/` is the only package that would
   change once it is known to be fetchable); a classifier first (`SL-X-3`); pgvector (`SL-X-5`).
 - **Revisit when:** thousands of records per scan kind make the pairwise pass the bottleneck (`SL-X-8`).
 - **Validation:** `test_processing_stays_pure` · `test_prepared_features_score_exactly_like_raw_snapshots`.

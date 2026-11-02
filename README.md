@@ -64,7 +64,7 @@ VS Code 에서는 워크스페이스의 `scanlabel API (8100)` 구성(또는 com
 
 묶는 기준 · 다시 묶기 흐름 · 묶음 지도 화면이 그리는 조건 · 묶이지 않는 경우는 [`docs/cluster-logic.html`](docs/cluster-logic.html) 에 그림과 함께 정리했습니다(브라우저로 엽니다 — 코드 흐름 기준, 개발자용).
 화면을 **읽는 사람**용 안내는 서버가 직접 내줍니다: `GET /guide`(화면의 「이 화면 읽는 법 ↗」). 원문은
-[`scanlabel/application/guide.html`](scanlabel/application/guide.html) 이고, 문서 속 숫자는 지금 상수로 채워집니다.
+[`scanlabel/application/web/guide.html`](scanlabel/application/web/guide.html) 이고, 문서 속 숫자는 지금 상수로 채워집니다.
 
 ## 측정
 
@@ -74,7 +74,7 @@ VS Code 에서는 워크스페이스의 `scanlabel API (8100)` 구성(또는 com
 ```
 
 라벨이 수십 건 쌓이면 `eval` 로 「닮은 모양 = 같은 원인」이 실제로 맞는지부터 확인합니다. 문턱값 · 가중치는
-`scanlabel/processing/shape.py` 의 상수 한 곳에만 있습니다. `refeature` 는 라벨된 기록과 기록 풀을 함께 새 판으로
+`scanlabel/processing/shape/` 의 상수 한 곳에만 있습니다. `refeature` 는 라벨된 기록과 기록 풀을 함께 새 판으로
 바꿉니다 — 그 뒤 `cluster` 를 다시 돌립니다.
 
 ## 테스트
