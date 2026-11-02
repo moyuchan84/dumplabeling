@@ -33,6 +33,9 @@ needs a stored fact, the caller passes it in (`Tree`, `candidates`, `member_labe
 - Reading scores: `rank` (per-level ranking with the tree roll-up, the "sure" levels) · `similar_cases` ·
   `cluster` (representative-seeded grouping) · `cluster_category` · `cluster_map` / `project` /
   `project_features` (landmark MDS, `SL-MAP-1`) · `evaluate` (leave-one-out).
+- Explaining (`SL-DOC-2`): `walk_sample` (a deterministic sample from the real run's largest clusters) ·
+  `walkthrough` (every intermediate value from snapshot to cut, for `/guide/example`) — it calls the same functions
+  the clustering calls and judges nothing of its own.
 
 ### `tree.py` — the label tree's rules
 - `Tree` (an immutable view over `label_defs` rows: path, ancestors, effective retirement, children) ·
@@ -54,5 +57,5 @@ needs a stored fact, the caller passes it in (`Tree`, `candidates`, `member_labe
 
 ## Test map
 `tests/test_shape.py` — features, similarity, ranking, clusters, map, evaluation (the `SL-FEAT` / `SL-SIM` /
-`SL-SUG` / `SL-CLU` / `SL-MAP` / `SL-EVAL` lines of SPEC.md). `tests/test_tree.py` — the tree rules (`SL-TREE`).
+`SL-SUG` / `SL-CLU` / `SL-MAP` / `SL-EVAL` / `SL-DOC-2` lines of SPEC.md). `tests/test_tree.py` — the tree rules (`SL-TREE`).
 `tests/test_architecture.py` — the purity allowlist.

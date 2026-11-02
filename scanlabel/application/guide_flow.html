@@ -1,0 +1,927 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>묶음 분석 흐름</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+/* 데이터가 묶음이 되기까지 — 실제 기록으로 단계마다 그려 보는 설명 (SL-DOC-2). 값은 모두 GET example(서버의 shape.py)이 낸 것.
+   이 화면은 그리기만 한다 — 판단 · 문턱을 새로 만들지 않는다. 숫자 자리(중괄호 둘)는 서버가 shape.py 상수로 채운다. */
+:root {
+  --bg: #f6f3ee; --plane: #fffdf9; --ink: #2a2622; --ink-2: #5d554c; --line: #ddd4c8;
+  --accent: #b5651d; --accent-soft: #f3e3d1; --warn: #a2402c; --code-bg: #efe9e0; --hi: rgba(181,101,29,.14);
+  --f-body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1c1a17; --plane: #25221e; --ink: #ece6dc; --ink-2: #b4aa9c; --line: #3d3832;
+    --accent: #e09a55; --accent-soft: #3a2c1e; --warn: #f0937c; --code-bg: #2e2a25; --hi: rgba(224,154,85,.18);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1c1a17; --plane: #25221e; --ink: #ece6dc; --ink-2: #b4aa9c; --line: #3d3832;
+  --accent: #e09a55; --accent-soft: #3a2c1e; --warn: #f0937c; --code-bg: #2e2a25; --hi: rgba(224,154,85,.18);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.7; }
+.wrap { max-width: 1000px; margin: 0 auto; padding: 32px 16px 96px; display: flex; flex-direction: column; gap: 44px; }
+h1 { font-size: 28px; line-height: 1.3; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 20px; margin: 0; font-weight: 600; scroll-margin-top: 84px; }
+h3 { font-size: 15px; margin: 0; font-weight: 600; }
+p { margin: 0; max-width: 74ch; }
+section { display: flex; flex-direction: column; gap: 14px; scroll-margin-top: 84px; }
+ul { margin: 0; padding-left: 1.25em; display: flex; flex-direction: column; gap: 4px; max-width: 76ch; }
+.eyebrow { font-family: var(--f-mono); font-size: 11px; font-weight: 600; letter-spacing: .12em; color: var(--accent); }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.step { font-family: var(--f-mono); font-size: 12px; font-weight: 600; color: var(--plane); background: var(--accent); border-radius: 6px; padding: 0 7px; }
+.tag { font-family: var(--f-mono); font-size: 11px; border: 1px solid var(--line); border-radius: 6px; padding: 0 7px; color: var(--ink-2); }
+.lead { font-size: 16px; color: var(--ink-2); }
+.plane { background: var(--plane); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.mini { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+code, .mono { font-family: var(--f-mono); font-size: 12.5px; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+.q { border-left: 3px solid var(--accent); padding: 2px 0 2px 12px; color: var(--ink-2); }
+.note { border-left: 3px solid var(--warn); padding: 2px 0 2px 12px; }
+.cap { font-size: 13px; color: var(--ink-2); }
+.readout { font-family: var(--f-mono); font-size: 12px; color: var(--ink-2); min-height: 1.6em; white-space: pre-wrap; }
+.formula { font-family: var(--f-mono); font-size: 13px; background: var(--code-bg); border-radius: 8px; padding: 10px 12px; overflow-x: auto; white-space: pre-wrap; }
+a { color: var(--accent); }
+svg { display: block; width: 100%; height: auto; }
+svg text { fill: var(--ink); font-family: var(--f-body); font-size: 11px; }
+svg .ax { stroke: var(--line); }
+svg .faint { fill: var(--ink-2); }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+th { font-size: 12px; color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+#s10-tab td:first-child { white-space: nowrap; }
+td.n { font-family: var(--f-mono); font-size: 12.5px; text-align: right; white-space: nowrap; }
+/* 위에 붙는 고르기 줄 */
+.bar { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(6px);
+  border-bottom: 1px solid var(--line); }
+.bar .in { max-width: 1000px; margin: 0 auto; padding: 8px 16px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.bar label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); }
+select, button.seg { font: inherit; font-size: 13px; color: var(--ink); background: var(--plane); border: 1px solid var(--line);
+  border-radius: 8px; min-height: 30px; padding: 2px 8px; max-width: 100%; }
+.segs { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+button.seg { cursor: pointer; }
+button.seg[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+/* 한눈에 그림 */
+.flowmap { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.lane { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; }
+.lane .tit { flex: 0 0 100%; font-size: 12px; color: var(--ink-2); font-weight: 600; }
+.box { flex: 1 1 130px; display: flex; flex-direction: column; gap: 2px; text-decoration: none; color: var(--ink);
+  background: var(--plane); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; position: relative; }
+.box:hover { border-color: var(--accent); }
+.box b { font-size: 13.5px; font-weight: 600; }
+.box span { font-size: 12px; color: var(--ink-2); }
+.box .no { font-family: var(--f-mono); font-size: 11px; color: var(--accent); }
+.box.skew { border-left: 4px solid #466ebf; } .box.pca { border-left: 4px solid #8658be; } .box.both { border-left: 4px solid var(--accent); }
+.arrow { align-self: center; color: var(--ink-2); font-size: 14px; }
+.state { padding: 24px; text-align: center; color: var(--ink-2); }
+nav.toc { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 14px; }
+@media (max-width: 640px) { .arrow { display: none; } }
+</style>
+</head>
+<body>
+<div class="bar"><div class="in">
+  <a href="../guide" style="font-size:13px">← 읽는 법</a>
+  <label>범위 <select id="g"></select></label>
+  <label><span class="sw" style="background:var(--accent)"></span>기록 A <select id="ra"></select></label>
+  <label><span class="sw" style="background:var(--ink-2)"></span>기록 B <select id="rb"></select></label>
+</div></div>
+<div class="wrap">
+
+<header style="display:flex;flex-direction:column;gap:10px">
+  <div class="eyebrow">SCANLABEL · 묶음 분석 흐름</div>
+  <h1>데이터가 묶음이 되기까지 — 실제 기록으로 따라가기</h1>
+  <p class="lead">스캔 기록 한 건이 어떤 숫자로 바뀌고, 두 기록이 얼마나 닮았는지를 어떻게 재며, 그 점수로 어떻게 묶음이 생기는지를 단계마다 그림으로 보여 줍니다.</p>
+  <ul>
+    <li><b>그림의 값은 모두 실제 데이터입니다.</b> 지금 풀에 있는 한 묶음 범위(스캔 종류 · 척 · 센서)에서 <span id="nsample">36</span>건을 골라, 서버가 실제 묶을 때 쓰는 함수로 계산했습니다.</li>
+    <li>위 줄에서 <b>범위</b>와 <b>기록 A · B</b>를 바꾸면 모든 그림이 그 기록으로 다시 그려집니다. 8단계 거리표에서 칸을 눌러도 A · B가 바뀝니다.</li>
+    <li>그래프에 마우스를 올리면 그 자리의 숫자가 아래에 나옵니다.</li>
+    <li>수식과 함수 이름은 <a href="../guide#method">읽는 법 11절(엔지니어용)</a>에 있습니다. 이 페이지는 같은 내용을 그림으로 풀어 쓴 것입니다.</li>
+  </ul>
+  <div id="meta" class="cap"></div>
+</header>
+
+<div id="state" class="state">불러오는 중 — 처음 한 번은 몇 초 걸립니다(범위 전체의 기준선 · 주성분을 계산합니다).</div>
+
+<div id="body" hidden style="display:flex;flex-direction:column;gap:44px">
+
+<section id="s0">
+  <div class="head"><span class="step">0</span><h2>한눈에 — 전체 흐름</h2></div>
+  <ul>
+    <li>공통: 원본 스캔을 <b>요약(스냅샷)</b>으로 줄여 저장합니다. 이후 모든 계산은 이 요약만으로 합니다.</li>
+    <li>잣대 두 가지: <b>채널 간 편차</b>(기본)와 <b>주성분</b>. 두 기록이 얼마나 닮았는지를 서로 다른 방법으로 잽니다.</li>
+    <li>어느 잣대든 결과는 같은 모양입니다. 기록 쌍마다 <b>점수</b>를 내고, <b>거리 = 1 − 점수</b>로 바꿉니다. 그 거리로 <b>평균 연결 계층 묶기</b>를 한 뒤 <b>실루엣</b>이 가장 좋은 자리에서 자릅니다.</li>
+    <li>칸을 누르면 그 단계로 갑니다. 칸 아래 숫자는 지금 고른 범위의 실제 크기입니다.</li>
+  </ul>
+  <div class="flowmap" id="flowmap"></div>
+  <div class="scroll"><table id="shapes"></table></div>
+</section>
+
+<section id="s1">
+  <div class="head"><span class="step">1</span><h2>원본 → 요약(스냅샷)</h2><span class="tag">공통</span></div>
+  <ul>
+    <li>원본 기록 = 채널마다 측정값 배열(<code>value</code>) + 측정 위치(<code>xyz.x</code>, <code>xyz.z</code>). 대시보드에서 보는 그 데이터입니다.</li>
+    <li>읽을 수 없는 값(빈 문자열 · NaN)은 <b>0으로 바꾸지 않고 버립니다</b>.</li>
+    <li>채널마다 세 가지만 남깁니다.
+      <ul>
+        <li><b>측정 순서 곡선</b>: 측정한 순서대로 늘어놓고 {{PATH_N}}칸으로 나눠 칸마다 평균 → 값 {{PATH_N}}개. 대시보드의 「측정 순서」 그래프와 같은 축입니다.</li>
+        <li><b>칸 평균(격자)</b>: x · z 범위를 각각 {{GRID_N}}등분 → {{GRID_N}}×{{GRID_N}} 칸마다 평균. 점이 없는 칸은 비워 둡니다. 대시보드의 2D 맵을 거칠게 줄인 것입니다.</li>
+        <li><b>통계</b>: 점 수 · 평균 · 표준편차 · 최소 · 최대.</li>
+      </ul></li>
+    <li>이 단계의 값은 <b>원래 단위</b> 그대로입니다. 아직 아무것도 정규화하지 않았습니다.</li>
+  </ul>
+  <div class="plane">
+    <h3 id="s1-title"></h3>
+    <div class="scroll"><table id="s1-stats"></table></div>
+    <div class="mini" id="s1-ch"></div>
+    <div class="cap">위: 측정 순서 곡선({{PATH_N}}칸, 원래 단위). 아래: {{GRID_N}}×{{GRID_N}} 칸 평균(가로 = X, 세로 = Z, 위쪽이 큰 Z). 빗금 칸 = 점이 없는 칸.</div>
+  </div>
+</section>
+
+<section id="s2">
+  <div class="head"><span class="step">2</span><h2>채널마다 정규화 — 단위가 다른 채널을 한 자로</h2><span class="tag">공통</span></div>
+  <ul>
+    <li>채널마다 단위와 크기가 다릅니다(어떤 채널은 ±100, 어떤 채널은 ±20). 그대로 겹치면 큰 채널만 보입니다.</li>
+    <li>그래서 채널마다 <b>(값 − 그 채널의 평균) ÷ 그 채널의 표준편차</b>로 바꿉니다. 이제 모든 채널이 「제 표준편차 몇 배」라는 같은 자를 씁니다.</li>
+    <li>평균 · 표준편차는 <b>그 기록, 그 채널의 모든 점</b>으로 냅니다. 다른 기록과는 무관합니다.</li>
+    <li>모양은 그대로이고 높이와 기준만 맞춰집니다. 아래 버튼으로 전후를 비교해 보세요.</li>
+  </ul>
+  <div class="plane">
+    <div class="segs" id="s2-mode"></div>
+    <div id="s2-lg"></div>
+    <div id="s2-chart"></div>
+    <div class="readout" id="s2-read"></div>
+    <div class="scroll"><table id="s2-tab"></table></div>
+  </div>
+</section>
+
+<section id="s3">
+  <div class="head"><span class="step">3</span><h2>격자 → X 단면 · Z 단면</h2><span class="tag">면 스캔</span></div>
+  <ul>
+    <li>정규화한 {{GRID_N}}×{{GRID_N}} 격자에서 두 방향의 평균 곡선을 만듭니다.
+      <ul><li><b>X 단면</b>: 열(같은 X)마다 위아래 칸의 평균 → {{GRID_N}}개</li><li><b>Z 단면</b>: 행(같은 Z)마다 좌우 칸의 평균 → {{GRID_N}}개</li></ul></li>
+    <li>측정 순서와 무관한 「모양」입니다. 대시보드의 X단면 · Z단면 그래프와 같은 뜻입니다.</li>
+    <li>면 스캔의 비교 재료는 네 가지입니다: <b>X 단면 · Z 단면 · 격자 · 측정 순서 곡선</b>. 선 스캔은 측정 순서 곡선 하나뿐입니다.</li>
+    <li>격자 위에 마우스를 올리면 그 열과 행이 단면 그래프에서 어느 점이 되는지 표시됩니다.</li>
+  </ul>
+  <div class="plane">
+    <div class="segs" id="s3-ch"></div>
+    <div class="cols">
+      <div id="s3-heat"></div>
+      <div style="display:flex;flex-direction:column;gap:6px"><div class="cap">X 단면(열 평균)</div><div id="s3-x"></div><div class="cap">Z 단면(행 평균)</div><div id="s3-z"></div></div>
+    </div>
+    <div class="readout" id="s3-read"></div>
+  </div>
+</section>
+
+<section id="s4">
+  <div class="head"><span class="step">4</span><h2>채널 간 편차 — 채널끼리 어긋난 정도</h2><span class="tag" style="color:#466ebf">잣대 ① skew</span></div>
+  <ul>
+    <li>dump 오류는 한 채널의 모양보다 <b>채널끼리 어긋나는 자리와 방향</b>으로 갈린다고 봅니다. 그래서 기본 잣대는 「채널 간 편차」입니다.</li>
+    <li>같은 자리(같은 칸)마다 모든 채널 값의 평균을 내고, 각 채널이 그 평균에서 얼마나 떨어졌는지를 봅니다: <b>편차 = 채널 값 − 채널들의 평균</b>.</li>
+    <li>모든 채널이 같이 움직이면 편차는 0입니다. 한 채널만 튀면 그 자리에 큰 편차가 남습니다.</li>
+    <li id="s4-two" hidden>채널이 둘이면 두 편차는 항상 <b>크기는 같고 부호만 반대</b>입니다(A가 평균보다 +d면 B는 −d).</li>
+  </ul>
+  <div class="plane">
+    <div class="segs" id="s4-mat"></div>
+    <div id="s4-lg"></div>
+    <div class="cap">위: 정규화한 값(실선)과 채널들의 평균(점선) · 아래: 편차(채널 값 − 평균)</div>
+    <div id="s4-top"></div>
+    <div id="s4-bot"></div>
+    <div class="readout" id="s4-read"></div>
+  </div>
+</section>
+
+<section id="s5">
+  <div class="head"><span class="step">5</span><h2>「평소 어긋남」 빼기 — 이 기록만의 어긋남</h2><span class="tag" style="color:#466ebf">잣대 ① skew</span></div>
+  <ul>
+    <li>장비에 따라 채널끼리 <b>원래부터</b> 다르게 움직이는 경우가 있습니다(예: 한 채널이 늘 반대 방향). 이 고정된 편차는 모든 기록에 똑같이 실려 오류의 어긋남을 덮습니다.</li>
+    <li>그래서 범위 안의 모든 기록(<span class="nG"></span>건)에서 <b>같은 자리 · 같은 채널 편차의 중앙값</b>을 「평소 어긋남(기준선)」으로 정하고, 각 기록의 편차에서 뺍니다.</li>
+    <li>평균이 아니라 중앙값을 씁니다. 한 오류 유형이 범위의 절반 미만이면 그 오류의 어긋남은 지워지지 않고 남습니다.</li>
+    <li>이렇게 남은 값이 <b>비교 재료</b>입니다. 묶음 상세의 「채널 간 편차」 그래프가 바로 이 값입니다.</li>
+  </ul>
+  <div class="plane">
+    <div class="segs" id="s5-mat"></div>
+    <div id="s5-lg"></div>
+    <div class="mini">
+      <div><div class="cap">① 이 기록의 편차(4단계)</div><div id="s5-a"></div></div>
+      <div><div class="cap">② 범위의 평소 어긋남(중앙값)</div><div id="s5-b"></div></div>
+      <div><div class="cap">③ ① − ② = 비교 재료</div><div id="s5-c"></div></div>
+    </div>
+    <div class="readout" id="s5-read"></div>
+  </div>
+</section>
+
+<section id="s6">
+  <div class="head"><span class="step">6</span><h2>두 기록의 닮음 점수</h2><span class="tag" style="color:#466ebf">잣대 ① skew</span></div>
+  <ul>
+    <li>A와 B의 비교 재료(5단계 ③)를 각각 한 줄로 늘어놓은 것을 u, v라 하면, 점수는 다음과 같습니다.
+      <div class="formula">점수 = (2·u·v + f) ÷ (|u|² + |v|² + f)        f = 2 · (값 개수) · {{SKEW_FLOOR}}²</div></li>
+    <li>읽는 법: 어긋난 <b>자리 · 방향 · 크기</b>가 모두 같으면 1, 서로 무관하면 0 근처, 정반대면 −1에 가깝습니다.</li>
+    <li>f는 「잡음 바닥」입니다. 둘 다 거의 어긋나지 않은(평소와 같은) 기록이면 점수가 1 쪽으로 갑니다. 아주 작은 잡음끼리의 우연한 닮음/다름을 키우지 않으려는 장치입니다.</li>
+    <li>재료마다 점수를 따로 낸 뒤 섞습니다: <b>단면</b>(X · Z 평균), <b>격자</b>, <b>측정 순서</b>가 각각 1/3씩입니다(가중치 {{W_1D}} · {{W_2D}} · {{W_SEQ}}).</li>
+    <li><b>거리 = 1 − 점수</b>. 0이면 똑같고, 클수록 다릅니다(최대 2).</li>
+  </ul>
+  <div class="plane">
+    <div class="segs" id="s6-mat"></div>
+    <div id="s6-lg"></div>
+    <div class="cap">실선 = A, 점선 = B(같은 색 = 같은 채널). 두 선이 겹칠수록 그 재료의 점수가 1에 가깝습니다.</div>
+    <div id="s6-chart"></div>
+    <div class="formula" id="s6-calc"></div>
+    <div class="scroll"><table id="s6-tab"></table></div>
+  </div>
+</section>
+
+<section id="s7">
+  <div class="head"><span class="step">7</span><h2>주성분 — 두 번째 잣대</h2><span class="tag" style="color:#8658be">잣대 ② pca</span></div>
+  <ul>
+    <li>목적: 「채널 간 편차」만 보지 않고, <b>채널 각각의 모양</b>과 <b>크기(진폭)</b>가 평소와 다른 것까지 함께 봅니다.</li>
+    <li>① 기록 하나를 숫자 한 줄로 늘어놓습니다. 세 재료를 이어 붙입니다(아래 막대).
+      <ul>
+        <li><b>채널별 모양</b>: 2단계의 정규화 값(X · Z 단면, 격자는 {{PCA_GRID}}×{{PCA_GRID}}로, 측정 순서는 {{PCA_PATH}}칸으로 줄임)</li>
+        <li><b>채널 간 편차</b>: 4단계와 같은 것</li>
+        <li><b>크기</b>: 채널마다 log(표준편차)</li>
+      </ul></li>
+    <li>② 자리마다 범위 전체(<span class="nG"></span>건)의 <b>중앙값을 빼서</b> 「평소와 다른 정도」로 바꿉니다.</li>
+    <li>③ 재료마다 몫(가중치)을 곱합니다. 값 수가 많은 재료가 이기지 않도록 「몫 ÷ 값 수」의 제곱근을 곱합니다.</li>
+    <li>④ 범위 전체의 줄들로 <b>주성분 분석</b>을 합니다. 기록들이 가장 크게 갈리는 방향(축)을 찾아, 분산의 {{PCA_VAR_PCT}}%를 설명할 때까지 최대 {{PCA_MAX_K}}개 축을 남깁니다. 기록마다 이 축들 위의 <b>좌표</b>가 생깁니다.</li>
+    <li>⑤ 두 기록의 점수 = 좌표로 6단계와 같은 꼴의 식을 씁니다(잡음 바닥 {{PCA_FLOOR}}).</li>
+  </ul>
+  <div id="s7-none" class="note" hidden>이 범위에는 주성분 투영식이 없습니다(기록이 너무 적거나 채널 구성이 다름). 「다시 묶기」 뒤에 다시 보세요.</div>
+  <div class="plane">
+    <h3>① 한 줄의 구성 — <span id="s7-d"></span>개 값</h3>
+    <div id="s7-layout"></div>
+    <div class="segs" id="s7-view"></div>
+    <div id="s7-vec"></div>
+    <div class="readout" id="s7-read"></div>
+    <div class="scroll"><table id="s7-fac"></table></div>
+  </div>
+  <div class="cols">
+    <div class="plane"><h3>④ 축마다 설명하는 몫</h3><div id="s7-var"></div><div class="cap" id="s7-varcap"></div><div id="s7-axes"></div></div>
+    <div class="plane"><h3>④ 범위 전체의 좌표(첫째 · 둘째 축)</h3><div id="s7-scatter"></div><div class="readout" id="s7-sread"></div>
+      <div class="cap">색 = 실제 판(pca)의 묶음 번호, 회색 = 묶이지 않음. 굵은 점 = 이 페이지의 표본, A · B는 고리로 표시. 점을 누르면 그 기록이 A가 됩니다(표본만).</div></div>
+  </div>
+  <div class="plane"><h3>⑤ A와 B의 좌표 점수</h3><div class="formula" id="s7-calc"></div></div>
+</section>
+
+<section id="s8">
+  <div class="head"><span class="step">8</span><h2>거리표 — 모든 쌍의 거리</h2><span class="tag">공통</span></div>
+  <ul>
+    <li>범위 안의 모든 기록 쌍에 대해 6단계(또는 7단계 ⑤) 점수를 내고 <b>거리 = 1 − 점수</b>로 바꾼 표입니다. 비교할 수 없는 쌍은 거리 1입니다.</li>
+    <li>실제 판은 범위마다 최대 {{CLUSTER_MAX_N}}건(쌍 약 32만 개)이고, 여기서는 표본 <span class="nS"></span>건만 보입니다.</li>
+    <li>행과 열은 9단계 덴드로그램의 순서로 늘어놓았습니다. 그래서 <b>닮은 기록끼리 붙어 진한 사각형</b>이 대각선에 나타납니다. 그 사각형이 묶음입니다.</li>
+    <li>칸을 누르면 그 두 기록이 A · B가 되고, 위 단계의 그림이 모두 바뀝니다.</li>
+  </ul>
+  <div class="plane">
+    <div class="segs" id="s8-method"></div>
+    <div id="s8-heat"></div>
+    <div class="readout" id="s8-read"></div>
+    <div class="legend" id="s8-leg"></div>
+  </div>
+</section>
+
+<section id="s9">
+  <div class="head"><span class="step">9</span><h2>평균 연결 계층 묶기 → 실루엣으로 자르기</h2><span class="tag">공통</span></div>
+  <ul>
+    <li><b>합치기</b>: 처음에는 기록 하나하나가 무리입니다. 서로 가장 가까운 두 무리를 하나로 합치고, 이를 하나가 남을 때까지 되풀이합니다.</li>
+    <li><b>무리 사이 거리</b> = 양쪽 구성원 쌍 거리의 평균(평균 연결, UPGMA). 아래 덴드로그램에서 가로선의 높이가 합친 순간의 거리입니다.</li>
+    <li><b>자르기</b>: 「0.8 이상」 같은 문턱은 쓰지 않습니다. 몇 개로 자를지(k)를 바꿔 가며 <b>평균 실루엣</b>을 재고, 가장 큰 k를 고릅니다.
+      <ul>
+        <li>실루엣(기록 하나) = (가장 가까운 다른 무리까지 평균 거리 − 제 무리 평균 거리) ÷ 둘 중 큰 것. 1에 가까우면 제 무리와 붙고 남과는 멉니다.</li>
+        <li>{{CLUSTER_MIN_SIZE}}건 미만 무리는 「잡음(묶이지 않음)」으로 보고, 실루엣 0으로 계산합니다.</li>
+        <li>묶음은 2 … {{CLUSTER_K_MAX}}개 중에서 고릅니다. 어떤 갈림도 실루엣이 0보다 크지 않으면 범위 전체를 한 묶음으로 둡니다.</li>
+      </ul></li>
+    <li>아래 슬라이더나 실루엣 그래프의 점으로 k를 바꿔 보세요. 덴드로그램의 자르는 선, 8단계의 사각형, 10단계의 표가 같이 바뀝니다.</li>
+  </ul>
+  <div class="plane">
+    <label class="cap" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">무리 수 k <input type="range" id="s9-k" min="1" max="20" value="2" style="flex:1 1 220px"><b id="s9-kv" class="mono"></b></label>
+    <div id="s9-dendro"></div>
+    <div class="cap">맨 아래 두 줄: <b>이 표본의 갈림</b>(지금 k) · <b>실제 판의 묶음 번호</b>(범위 전체 <span class="nG"></span>건으로 묶은 결과). 색이 대체로 같은 덩어리로 맞으면 표본에서도 같은 구조가 보인다는 뜻입니다.</div>
+    <div id="s9-sil"></div>
+    <div class="readout" id="s9-read"></div>
+  </div>
+</section>
+
+<section id="s10">
+  <div class="head"><span class="step">10</span><h2>결과 — 묶음과 실제 라벨</h2><span class="tag">공통</span></div>
+  <ul>
+    <li>잘린 무리 중 {{CLUSTER_MIN_SIZE}}건 이상이 <b>묶음</b>이 됩니다. 대표 = 무리 안에서 나머지와 거리 합이 가장 작은 기록입니다.</li>
+    <li>실제 판은 범위 전체로 묶으므로 이 표본의 결과와 다를 수 있습니다. 표에서 「실제 판 번호」 열과 비교해 보세요.</li>
+    <li>라벨이 붙은 기록이 있으면 같이 보입니다. 같은 묶음에 같은 라벨이 모이면 잣대가 오류 유형을 잘 가른다는 뜻입니다.</li>
+  </ul>
+  <div class="plane"><div class="scroll"><table id="s10-tab"></table></div></div>
+  <p class="q">다음: 묶음 탭의 묶음 지도에서 같은 결과를 범위 전체로 볼 수 있습니다. 개선 후보는 <a href="../guide#limits">읽는 법 12절 「한계와 보완할 점」</a>에 있습니다.</p>
+</section>
+
+</div>
+</div>
+
+<script>
+"use strict";
+const NS = "http://www.w3.org/2000/svg";
+const PAL = ["#466ebf", "#bb564c", "#579a65", "#b87d4d", "#8658be", "#518ca0", "#bc5779", "#749a52", "#5e66c3", "#c97150"];
+const CLU = ["#c2861f", "#2f8f83", "#7a5cc2", "#c24f7a", "#5a7d2a", "#3b6ea8", "#a2402c", "#8a6d3b", "#4f6d8a", "#9c4fb0", "#3a8a4a", "#b05a2a"];
+const GRAY = "#9a9187";
+const MAT = { x: "X 단면", z: "Z 단면", path: "측정 순서", line: "측정 순서", grid: "격자" };
+const PART = { shape: "채널별 모양", skew: "채널 간 편차", amp: "크기 log(σ)" };
+const PART_COL = { shape: "#579a65", skew: "#466ebf", amp: "#b87d4d" };
+let D = null;
+const st = { a: 0, b: 1, s2: "raw", s3: null, mat: "x", pv: "resid", method: "skew", k: null };
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const fmt = (v, d = 2) => (v === null || v === undefined || Number.isNaN(v)) ? "—" : Number(v).toFixed(d);
+const fmtN = (v) => Number(v).toLocaleString("ko-KR");
+const chColor = (k) => PAL[Math.max(0, D.channels.indexOf(k)) % PAL.length];
+const recName = (i) => `#${i + 1}`;
+
+// ─── 그리기 도구 ───────────────────────────────────────────────────────────
+function niceTicks(lo, hi, n = 4) {
+  const span = hi - lo || 1, raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) || raw;
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(10));
+  return out;
+}
+function tickTxt(v) { const a = Math.abs(v); return a >= 1000 ? v.toFixed(0) : a >= 10 ? v.toFixed(0) : a >= 1 ? v.toFixed(1) : v.toFixed(2); }
+
+/* 꺾은선 — series: [{vals, color, dash, width, label}], 길이가 달라도 같은 폭에 편다. hover(j) → 읽기 칸. */
+function lineChart(host, o) {
+  const W = o.w || 640, H = o.h || 170, L = 46, R = 10, T = 8, B = 20;
+  const n = Math.max(...o.series.map((s) => s.vals.length), 2);
+  let lo = Infinity, hi = -Infinity;
+  for (const s of o.series) for (const v of s.vals) if (v !== null && v !== undefined) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  if (!Number.isFinite(lo)) { lo = -1; hi = 1; }
+  if (o.zero !== false) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+  if (o.sym) { const m = Math.max(Math.abs(lo), Math.abs(hi), o.minSpan || 0); lo = -m; hi = m; }
+  if (hi - lo < 1e-9) { hi += 1; lo -= 1; }
+  const pad = (hi - lo) * 0.06; lo -= pad; hi += pad;
+  const X = (j, len) => L + (len > 1 ? j / (len - 1) : 0.5) * (W - L - R);
+  const Y = (v) => T + (hi - v) / (hi - lo) * (H - T - B);
+  let g = "";
+  for (const b of o.bands || []) {
+    const x0 = X(b.from - 0.5, n), x1 = X(b.to - 0.5, n);
+    g += `<rect x="${x0}" y="${T}" width="${Math.max(1, x1 - x0)}" height="${H - T - B}" fill="${b.fill}" opacity=".10"/>`;
+    if (b.label && x1 - x0 > 34) g += `<text x="${(x0 + x1) / 2}" y="${T + 11}" text-anchor="middle" class="faint" style="font-size:10px">${esc(b.label)}</text>`;
+  }
+  for (const t of niceTicks(lo, hi)) {
+    g += `<line class="ax" x1="${L}" x2="${W - R}" y1="${Y(t)}" y2="${Y(t)}" stroke-width="${t === 0 ? 1.2 : .5}"/>`;
+    g += `<text x="${L - 5}" y="${Y(t) + 3.5}" text-anchor="end" class="faint">${tickTxt(t)}</text>`;
+  }
+  if (o.xlabel) g += `<text x="${W - R}" y="${H - 5}" text-anchor="end" class="faint">${esc(o.xlabel)}</text>`;
+  for (const s of o.series) {
+    let d = "", pen = false;
+    s.vals.forEach((v, j) => {
+      if (v === null || v === undefined) { pen = false; return; }
+      d += `${pen ? "L" : "M"}${X(j, s.vals.length).toFixed(1)},${Y(v).toFixed(1)}`; pen = true;
+    });
+    g += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.width || 1.6}" ${s.dash ? `stroke-dasharray="${s.dash}"` : ""} opacity="${s.opacity || 1}"/>`;
+    if (s.dots) s.vals.forEach((v, j) => { if (v !== null) g += `<circle cx="${X(j, s.vals.length)}" cy="${Y(v)}" r="2.2" fill="${s.color}"/>`; });
+  }
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img">${g}<line class="guide" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--accent)" stroke-width="1" visible="false" opacity="0"/><rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"/></svg>`;
+  const svg = host.querySelector("svg"), guide = svg.querySelector(".guide");
+  const mark = (j) => {
+    if (j === null || j === undefined) { guide.setAttribute("opacity", "0"); return; }
+    const x = X(j, n); guide.setAttribute("x1", x); guide.setAttribute("x2", x); guide.setAttribute("opacity", ".8");
+  };
+  if (o.hover) {
+    svg.addEventListener("pointermove", (e) => {
+      const r = svg.getBoundingClientRect(), px = (e.clientX - r.left) / r.width * W;
+      const j = Math.max(0, Math.min(n - 1, Math.round((px - L) / (W - L - R) * (n - 1))));
+      mark(j); o.hover(j);
+    });
+    svg.addEventListener("pointerleave", () => { mark(null); o.hover(null); });
+  }
+  if (o.mark !== undefined) mark(o.mark);
+  return { mark };
+}
+const at = (vals, j, n) => vals[Math.round(j * (vals.length - 1) / Math.max(1, n - 1))];
+
+function divColor(v, m) {
+  if (v === null || v === undefined) return null;
+  const t = Math.max(-1, Math.min(1, v / (m || 1)));
+  return t >= 0 ? `rgba(187,86,76,${(t * .92 + .04).toFixed(3)})` : `rgba(70,110,191,${(-t * .92 + .04).toFixed(3)})`;
+}
+/* 격자 열지도 — 행 = Z(아래가 작은 Z), 열 = X. scale: 'div'(0 가운데) | 'seq'(최소 … 최대). */
+function heat(host, vals, n, o = {}) {
+  const S = o.cell || 14, W = n * S + 30, H = n * S + 22;
+  const have = vals.filter((v) => v !== null);
+  const lo = Math.min(...have), hi = Math.max(...have), m = Math.max(Math.abs(lo), Math.abs(hi)) || 1;
+  let g = `<defs><pattern id="hatch${o.id || ""}" width="4" height="4" patternUnits="userSpaceOnUse"><path d="M0,4 L4,0" stroke="var(--line)" stroke-width="1"/></pattern></defs>`;
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+    const v = vals[r * n + c];
+    let fill;
+    if (v === null) fill = `url(#hatch${o.id || ""})`;
+    else if (o.scale === "seq") fill = `rgba(181,101,29,${(((v - lo) / ((hi - lo) || 1)) * .9 + .05).toFixed(3)})`;
+    else fill = divColor(v, m);
+    g += `<rect x="${24 + c * S}" y="${(n - 1 - r) * S}" width="${S - .5}" height="${S - .5}" fill="${fill}"/>`;
+  }
+  g += `<text x="${24 + n * S}" y="${n * S + 15}" text-anchor="end" class="faint">X →</text><text x="0" y="10" class="faint">Z↑</text>`;
+  g += `<rect class="hc" x="0" y="0" width="${S}" height="${n * S}" fill="none" stroke="var(--accent)" stroke-width="1.5" opacity="0"/>`;
+  g += `<rect class="hr" x="24" y="0" width="${n * S}" height="${S}" fill="none" stroke="var(--accent)" stroke-width="1.5" opacity="0" stroke-dasharray="3 2"/>`;
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="max-width:${o.max || 300}px">${g}</svg>`;
+  const svg = host.querySelector("svg"), hc = svg.querySelector(".hc"), hr = svg.querySelector(".hr");
+  if (o.hover) {
+    svg.addEventListener("pointermove", (e) => {
+      const b = svg.getBoundingClientRect(), px = (e.clientX - b.left) / b.width * W, py = (e.clientY - b.top) / b.height * H;
+      const c = Math.floor((px - 24) / S), rr = n - 1 - Math.floor(py / S);
+      if (c < 0 || c >= n || rr < 0 || rr >= n) return;
+      hc.setAttribute("x", 24 + c * S); hc.setAttribute("opacity", "1");
+      hr.setAttribute("y", (n - 1 - rr) * S); hr.setAttribute("opacity", "1");
+      o.hover(rr, c);
+    });
+    svg.addEventListener("pointerleave", () => { hc.setAttribute("opacity", "0"); hr.setAttribute("opacity", "0"); o.hover(null, null); });
+  }
+}
+function segs(host, items, cur, on) {
+  host.innerHTML = items.map(([k, t]) => `<button class="seg" data-k="${esc(k)}" aria-pressed="${k === cur}">${esc(t)}</button>`).join("");
+  host.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => on(b.dataset.k)));
+}
+const legendHtml = (keys) => `<div class="legend">${keys.map((k) => `<span class="chip"><span class="sw" style="background:${chColor(k)}"></span>${esc(k)}</span>`).join("")}</div>`;
+
+// ─── 데이터 ───────────────────────────────────────────────────────────────
+const A = () => D.records[st.a];
+const Bq = () => D.records[st.b];
+const mats = () => D.kind === "area" ? ["x", "z", "path"] : ["path"];
+const devKey = (m) => m === "path" ? "line" : m;
+
+async function load(group) {
+  $("state").hidden = false; $("body").hidden = true;
+  $("state").textContent = "불러오는 중 — 처음 한 번은 몇 초 걸립니다(범위 전체의 기준선 · 주성분을 계산합니다).";
+  try {
+    const q = new URLSearchParams(location.search);
+    const set = q.get("set_name") || "dump";
+    const res = await fetch(`example?set_name=${encodeURIComponent(set)}${group ? `&group=${encodeURIComponent(group)}` : ""}`);
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.detail || res.statusText);
+    D = body;
+  } catch (e) {
+    $("state").textContent = `예시를 불러오지 못했습니다: ${e.message}. 묶음 탭에서 「다시 묶기」를 한 번 하면 예시를 만들 수 있습니다.`;
+    return;
+  }
+  if (D.records.length < 2) { $("state").textContent = "이 범위에는 예시로 쓸 기록이 둘 미만입니다. 다른 범위를 고르세요."; return; }
+  st.a = 0;
+  // B — A 와 다른 실제 묶음의 첫 기록(대비가 보이게)
+  const na = D.records[0].run_no.skew;
+  st.b = Math.max(1, D.records.findIndex((r) => r.run_no.skew !== na));
+  st.s3 = D.channels[0]; st.mat = mats()[0]; st.k = null;
+  $("state").hidden = true; $("body").hidden = false;
+  fillPickers();
+  renderAll();
+}
+
+function fillPickers() {
+  $("g").innerHTML = D.groups.map((g) => `<option value="${esc(g.key)}" ${g.key === D.group ? "selected" : ""}>${esc(g.key.replaceAll("|", " · "))} (${g.size}건)</option>`).join("");
+  const opt = (sel) => D.records.map((r, i) => `<option value="${i}" ${i === sel ? "selected" : ""}>${recName(i)} · 묶음 ${r.run_no.skew ?? "없음"} · ${esc(r.ref ? r.ref.name : "id " + r.id)}</option>`).join("");
+  $("ra").innerHTML = opt(st.a); $("rb").innerHTML = opt(st.b);
+}
+
+function pick(a, b) {
+  if (a !== null) st.a = a;
+  if (b !== null) st.b = b;
+  if (st.a === st.b) st.b = (st.a + 1) % D.records.length;
+  $("ra").value = st.a; $("rb").value = st.b;
+  renderRecords();
+}
+
+function renderAll() {
+  const ns = D.records.length;
+  document.querySelectorAll(".nG").forEach((e) => (e.textContent = fmtN(D.n_group)));
+  document.querySelectorAll(".nS").forEach((e) => (e.textContent = ns));
+  $("nsample").textContent = ns;
+  const runs = Object.entries(D.runs).map(([m, r]) => r ? `${m === "skew" ? "채널 간 편차" : "주성분"} 판 #${r.id}(${r.created_at}, 묶음 ${r.clusters}개)` : `${m}: 아직 없음`).join(" · ");
+  $("meta").textContent = `범위 ${D.group.replaceAll("|", " · ")} — 기록 ${fmtN(D.n_group)}건, 채널 ${D.channels.join(" · ")}(${D.kind === "area" ? "면 스캔" : "선 스캔"}). 기준: ${runs}`;
+  $("s3").hidden = D.kind !== "area";
+  renderFlow();
+  renderRecords();
+  renderCluster();
+}
+function renderRecords() {
+  ["s2-lg", "s4-lg", "s5-lg", "s6-lg"].forEach((id) => ($(id).innerHTML = legendHtml(D.channels))); renderS1(); renderS2(); renderS3(); renderS4(); renderS5(); renderS6(); renderS7(); }
+
+// ─── 0. 흐름 ──────────────────────────────────────────────────────────────
+function renderFlow() {
+  const r = A(), k0 = D.channels[0], nch = D.channels.length;
+  const npt = r.raw[k0] ? r.raw[k0].stats.n : 0;
+  const pcaD = D.pca ? D.pca.layout.reduce((s, b) => s + b.len, 0) : 0;
+  const box = (no, href, cls, t, s) => `<a class="box ${cls}" href="#${href}"><span class="no">${no}</span><b>${t}</b><span>${s}</span></a>`;
+  const ar = `<span class="arrow">→</span>`;
+  const mt = D.kind === "area" ? "X · Z 단면, 격자, 측정 순서" : "측정 순서";
+  $("flowmap").innerHTML = `
+    <div class="lane"><div class="tit">공통 — 저장</div>
+      ${box("기록", "s1", "both", "원본 스캔", `채널 ${nch}개 × 점 ${fmtN(npt)}개`)}${ar}
+      ${box("1", "s1", "both", "요약(스냅샷)", `채널마다 곡선 {{PATH_N}} + 격자 {{GRID_N}}×{{GRID_N}} + 통계`)}${ar}
+      ${box("2", "s2", "both", "채널마다 정규화", "(값 − 평균) ÷ 표준편차")}
+      ${D.kind === "area" ? ar + box("3", "s3", "both", "단면 만들기", "격자 → X · Z 단면 {{GRID_N}}칸") : ""}
+    </div>
+    <div class="lane"><div class="tit" style="color:#466ebf">잣대 ① 채널 간 편차(skew, 기본)</div>
+      ${box("4", "s4", "skew", "채널 간 편차", `자리마다 채널 − 채널 평균 (${mt})`)}${ar}
+      ${box("5", "s5", "skew", "평소 어긋남 빼기", `범위 ${fmtN(D.n_group)}건의 중앙값`)}${ar}
+      ${box("6", "s6", "skew", "쌍 점수", "재료마다 점수 → 1/3씩")}
+    </div>
+    <div class="lane"><div class="tit" style="color:#8658be">잣대 ② 주성분(pca)</div>
+      ${box("7①", "s7", "pca", "한 줄로", `모양 · 편차 · 크기 → ${fmtN(pcaD)}개 값`)}${ar}
+      ${box("7②③", "s7", "pca", "평소 빼기 · 가중", "범위 중앙값을 빼고 몫을 곱함")}${ar}
+      ${box("7④", "s7", "pca", "주성분 좌표", D.pca ? `축 ${D.pca.kept}개(분산 ${Math.round(D.pca.explained.reduce((a, b) => a + b, 0) * 100)}%)` : "투영식 없음")}${ar}
+      ${box("7⑤", "s7", "pca", "쌍 점수", "좌표로 같은 꼴의 식")}
+    </div>
+    <div class="lane"><div class="tit">공통 — 묶기</div>
+      ${box("8", "s8", "both", "거리표", `거리 = 1 − 점수 · 범위마다 최대 {{CLUSTER_MAX_N}}건`)}${ar}
+      ${box("9", "s9", "both", "평균 연결 묶기", "가까운 무리부터 합침")}${ar}
+      ${box("9", "s9", "both", "실루엣으로 자르기", "묶음 2 … {{CLUSTER_K_MAX}}개 중 최고")}${ar}
+      ${box("10", "s10", "both", "묶음 · 지도", "{{CLUSTER_MIN_SIZE}}건 이상 = 묶음")}
+    </div>`;
+  const rows = [
+    ["원본 기록", `채널 ${nch}개 × 점 ${fmtN(npt)}개 (+ x · z 위치)`, "fleet 의 Dump raw — 저장하지 않음"],
+    ["요약(스냅샷)", `채널마다 곡선 {{PATH_N}}개 + 격자 {{GRID_N}}×{{GRID_N}} = ${{{GRID_N}} * {{GRID_N}}}칸 + 통계 5개`, "DB 에 저장 — 이후 계산은 모두 이것으로"],
+    ["skew 비교 재료", D.kind === "area" ? `채널마다 X {{GRID_N}} + Z {{GRID_N}} + 격자 ${{{GRID_N}} * {{GRID_N}}} + 측정 순서 {{PATH_N}}` : `채널마다 측정 순서 {{PATH_N}}`, "편차 − 평소 → 쌍마다 점수"],
+    ["pca 한 줄", `${fmtN(pcaD)}개 값`, D.pca ? `→ 좌표 ${D.pca.kept}개 → 쌍마다 점수` : "투영식 없음"],
+    ["거리표", `범위 ${fmtN(D.n_group)}건 → ${fmtN(D.n_group * (D.n_group - 1) / 2)}쌍`, `이 페이지는 표본 ${D.records.length}건`],
+  ];
+  $("shapes").innerHTML = `<tr><th>단계</th><th>데이터 모양(이 범위의 실제 크기)</th><th>비고</th></tr>` + rows.map((r) => `<tr><td>${r[0]}</td><td>${r[1]}</td><td class="cap">${r[2]}</td></tr>`).join("");
+}
+
+// ─── 1. 요약 ──────────────────────────────────────────────────────────────
+function renderS1() {
+  const r = A();
+  $("s1-title").textContent = `기록 A ${recName(st.a)} — ${r.ref ? r.ref.name + " · " + r.ref.source : "id " + r.id}${r.label ? " · 라벨 " + r.label.join(", ") : ""}`;
+  const keys = Object.keys(r.raw);
+  $("s1-stats").innerHTML = `<tr><th>채널</th><th style="text-align:right">점 수</th><th style="text-align:right">평균</th><th style="text-align:right">표준편차</th><th style="text-align:right">최소</th><th style="text-align:right">최대</th><th>곡선 한 칸에 든 점</th></tr>` +
+    keys.map((k) => { const s = r.raw[k].stats; return `<tr><td><span class="chip"><span class="sw" style="background:${chColor(k)}"></span>${esc(k)}</span></td><td class="n">${fmtN(s.n)}</td><td class="n">${fmt(s.mean, 3)}</td><td class="n">${fmt(s.std, 3)}</td><td class="n">${fmt(s.min, 3)}</td><td class="n">${fmt(s.max, 3)}</td><td class="cap">약 ${fmt(s.n / {{PATH_N}}, 1)}개의 평균</td></tr>`; }).join("");
+  const host = $("s1-ch"); host.innerHTML = "";
+  keys.forEach((k, i) => {
+    const c = document.createElement("div"); c.style.cssText = "display:flex;flex-direction:column;gap:4px";
+    c.innerHTML = `<div class="chip"><span class="sw" style="background:${chColor(k)}"></span><b>${esc(k)}</b></div><div></div><div class="readout"></div><div></div>`;
+    host.appendChild(c);
+    const [, lc, rd, hc] = c.children;
+    lineChart(lc, { series: [{ vals: r.raw[k].path || [], color: chColor(k) }], h: 120, w: 360, zero: false,
+      hover: (j) => (rd.textContent = j === null ? "" : `칸 ${j + 1}/{{PATH_N}}: ${fmt(r.raw[k].path[j], 3)}`) });
+    if (r.raw[k].grid) heat(hc, r.raw[k].grid, {{GRID_N}}, { scale: "seq", id: "s1" + i, max: 260,
+      hover: (rr, cc) => (rd.textContent = rr === null ? "" : `격자 X${cc + 1} · Z${rr + 1}: ${fmt(r.raw[k].grid[rr * {{GRID_N}} + cc], 3)}`) });
+    else hc.innerHTML = `<div class="cap">격자 없음 — 선 스캔(점이 한 줄)</div>`;
+  });
+}
+
+// ─── 2. 정규화 ────────────────────────────────────────────────────────────
+function renderS2() {
+  const r = A(), keys = Object.keys(r.norm);
+  segs($("s2-mode"), [["raw", "원래 단위"], ["z", "정규화 후"]], st.s2, (k) => { st.s2 = k; renderS2(); });
+  const series = keys.map((k) => ({ vals: st.s2 === "raw" ? (r.raw[k].path || []) : (r.norm[k].path || []), color: chColor(k), label: k }));
+  lineChart($("s2-chart"), { series, h: 200, xlabel: "측정 순서 →", hover: (j) => {
+    $("s2-read").textContent = j === null ? "" : `칸 ${j + 1}: ` + keys.map((k) => { const s = r.raw[k].stats; const v = r.raw[k].path[j]; return `${k} ${fmt(v, 2)} → (${fmt(v, 2)} − ${fmt(s.mean, 2)}) ÷ ${fmt(s.std, 2)} = ${fmt(r.norm[k].path[j], 2)}`; }).join("   ");
+  } });
+  $("s2-read").textContent = "";
+  $("s2-tab").innerHTML = `<tr><th>채널</th><th>바꾸는 식</th><th>원래 범위</th><th>정규화 후 범위</th></tr>` + keys.map((k) => {
+    const s = r.raw[k].stats, z = (r.norm[k].path || []).filter((v) => v !== null);
+    return `<tr><td><span class="chip"><span class="sw" style="background:${chColor(k)}"></span>${esc(k)}</span></td><td class="mono">(값 − ${fmt(s.mean, 3)}) ÷ ${fmt(s.std, 3)}</td><td class="n" style="text-align:left">${fmt(s.min, 2)} … ${fmt(s.max, 2)}</td><td class="n" style="text-align:left">${fmt(Math.min(...z), 2)} … ${fmt(Math.max(...z), 2)}</td></tr>`;
+  }).join("");
+}
+
+// ─── 3. 단면 ──────────────────────────────────────────────────────────────
+function renderS3() {
+  if (D.kind !== "area") return;
+  const r = A(), keys = Object.keys(r.norm);
+  if (!keys.includes(st.s3)) st.s3 = keys[0];
+  segs($("s3-ch"), keys.map((k) => [k, `채널 ${k}`]), st.s3, (k) => { st.s3 = k; renderS3(); });
+  const n = {{GRID_N}}, g = r.norm[st.s3].grid;
+  const xs = lineChart($("s3-x"), { series: keys.map((k) => ({ vals: r.norm[k].x, color: chColor(k), width: k === st.s3 ? 2.4 : 1.2, opacity: k === st.s3 ? 1 : .45, dots: k === st.s3 })), h: 120, w: 420 });
+  const zs = lineChart($("s3-z"), { series: keys.map((k) => ({ vals: r.norm[k].z, color: chColor(k), width: k === st.s3 ? 2.4 : 1.2, opacity: k === st.s3 ? 1 : .45, dots: k === st.s3 })), h: 120, w: 420 });
+  heat($("s3-heat"), g, n, { id: "s3", max: 320, hover: (rr, c) => {
+    xs.mark(c); zs.mark(rr);
+    if (rr === null) { $("s3-read").textContent = ""; return; }
+    const col = [], row = [];
+    for (let i = 0; i < n; i++) { if (g[i * n + c] !== null) col.push(g[i * n + c]); if (g[rr * n + i] !== null) row.push(g[rr * n + i]); }
+    $("s3-read").textContent = `칸 X${c + 1} · Z${rr + 1} = ${fmt(g[rr * n + c], 2)}\n열 X${c + 1}의 칸 ${col.length}개 평균 = ${fmt(r.norm[st.s3].x[c], 3)} → X 단면의 ${c + 1}번째 점\n행 Z${rr + 1}의 칸 ${row.length}개 평균 = ${fmt(r.norm[st.s3].z[rr], 3)} → Z 단면의 ${rr + 1}번째 점`;
+  } });
+}
+
+// ─── 4. 채널 간 편차 ──────────────────────────────────────────────────────
+function matSegs(host, rerender) {
+  segs(host, mats().map((m) => [m, MAT[m]]), st.mat, (k) => { st.mat = k; renderS4(); renderS5(); renderS6(); });
+}
+function renderS4() {
+  const r = A(), keys = D.channels, m = st.mat, dk = devKey(m);
+  $("s4-two").hidden = keys.length !== 2;
+  matSegs($("s4-mat"));
+  const norm = keys.map((k) => r.norm[k] ? r.norm[k][m] : []);
+  const len = Math.min(...norm.map((s) => s.length));
+  const mean = Array.from({ length: len }, (_, j) => { const v = norm.map((s) => s[j]); return v.some((x) => x === null) ? null : v.reduce((a, b) => a + b, 0) / v.length; });
+  const dev = keys.map((k) => (r.dev[k] || {})[dk] || []);
+  const read = (j) => {
+    if (j === null) { $("s4-read").textContent = ""; return; }
+    const jj = Math.round(j * (len - 1) / Math.max(1, len - 1));
+    $("s4-read").textContent = `${MAT[m]} ${jj + 1}번째 자리: 채널 평균 = (${keys.map((k, i) => fmt(norm[i][jj], 2)).join(" + ")}) ÷ ${keys.length} = ${fmt(mean[jj], 3)}\n편차: ` + keys.map((k, i) => `${k} ${fmt(norm[i][jj], 2)} − ${fmt(mean[jj], 2)} = ${fmt(dev[i][jj], 3)}`).join("   ");
+  };
+  const t = lineChart($("s4-top"), { series: [...keys.map((k, i) => ({ vals: norm[i], color: chColor(k) })), { vals: mean, color: "var(--ink)", dash: "5 4", width: 1.4 }], h: 160, hover: (j) => { b.mark(j); read(j); } });
+  const b = lineChart($("s4-bot"), { series: keys.map((k, i) => ({ vals: dev[i], color: chColor(k) })), h: 140, sym: true, hover: (j) => { t.mark(j); read(j); } });
+  $("s4-read").textContent = "";
+}
+
+// ─── 5. 평소 빼기 ─────────────────────────────────────────────────────────
+function renderS5() {
+  const r = A(), keys = D.channels, dk = devKey(st.mat);
+  matSegs($("s5-mat"));
+  const dev = keys.map((k) => (r.dev[k] || {})[dk] || []);
+  const base = keys.map((k) => ((D.baseline || {})[k] || {})[dk] || []);
+  const cen = keys.map((k) => (r.centred[k] || {})[dk] || []);
+  const all = [...dev, ...base, ...cen].flat().filter((v) => v !== null).map(Math.abs);
+  const m = Math.max(...all, .1);
+  const charts = [];
+  const read = (j) => {
+    charts.forEach((c) => c.mark(j));
+    $("s5-read").textContent = j === null ? "" : `${MAT[st.mat]} ${j + 1}번째 자리: ` + keys.map((k, i) => `${k} ${fmt(dev[i][j], 3)} − ${fmt(base[i][j], 3)} = ${fmt(cen[i][j], 3)}`).join("   ");
+  };
+  [["s5-a", dev], ["s5-b", base], ["s5-c", cen]].forEach(([id, ser]) => charts.push(lineChart($(id), { series: keys.map((k, i) => ({ vals: ser[i], color: chColor(k) })), h: 130, w: 320, sym: true, minSpan: m, hover: read })));
+  $("s5-read").textContent = D.baseline ? "" : "이 범위는 기준선이 없습니다(기록이 너무 적음) — 편차를 그대로 씁니다.";
+}
+
+// ─── 6. 쌍 점수 ───────────────────────────────────────────────────────────
+function scoreOf(u, v) {   // shape._skew_score 와 같은 꼴 — 화면의 값(소수 셋째 자리)으로 다시 계산해 보인다
+  let uv = 0, uu = 0, vv = 0, n = 0;
+  for (let j = 0; j < Math.min(u.length, v.length); j++) {
+    if (u[j] === null || v[j] === null) continue;
+    uv += u[j] * v[j]; uu += u[j] * u[j]; vv += v[j] * v[j]; n++;
+  }
+  const f = 2 * n * {{SKEW_FLOOR}} * {{SKEW_FLOOR}};
+  return { uv, uu, vv, n, f, s: n ? Math.max(-1, Math.min(1, (2 * uv + f) / (uu + vv + f))) : null };
+}
+function renderS6() {
+  const a = A(), b = Bq(), keys = D.channels, dk = devKey(st.mat);
+  matSegs($("s6-mat"));
+  const ser = [];
+  keys.forEach((k) => {
+    ser.push({ vals: (a.centred[k] || {})[dk] || [], color: chColor(k), width: 2 });
+    ser.push({ vals: (b.centred[k] || {})[dk] || [], color: chColor(k), dash: "5 4", width: 1.6 });
+  });
+  lineChart($("s6-chart"), { series: ser, h: 190, sym: true });
+  const u = keys.flatMap((k) => (a.centred[k] || {})[dk] || []), v = keys.flatMap((k) => (b.centred[k] || {})[dk] || []);
+  const c = scoreOf(u, v);
+  const sk = D.methods.skew, P = sk.parts;
+  const i = st.a, j = st.b;
+  const srv = { x: P.dx[i][j], z: P.dz[i][j], path: P.dp[i][j] };
+  $("s6-calc").textContent = `${MAT[st.mat]} — ${recName(i)}(A) vs ${recName(j)}(B), 채널 ${keys.length}개 × 자리 = 값 ${c.n}개\n` +
+    `u·v = ${fmt(c.uv, 3)}   |u|² = ${fmt(c.uu, 3)}   |v|² = ${fmt(c.vv, 3)}   f = 2 × ${c.n} × {{SKEW_FLOOR}}² = ${fmt(c.f, 3)}\n` +
+    `점수 = (2 × ${fmt(c.uv, 3)} + ${fmt(c.f, 3)}) ÷ (${fmt(c.uu, 3)} + ${fmt(c.vv, 3)} + ${fmt(c.f, 3)}) = ${fmt(c.s, 3)}` +
+    `   (서버 값 ${fmt(D.kind === "area" ? srv[st.mat] : sk.score[i][j], 3)} — 차이는 그림용 반올림)`;
+  const d1 = P.dx[i][j] !== null && P.dz[i][j] !== null ? (P.dx[i][j] + P.dz[i][j]) / 2 : null;
+  const total = sk.score[i][j];
+  const rows = D.kind === "area" ? [
+    ["X 단면", P.dx[i][j], ""], ["Z 단면", P.dz[i][j], ""], ["단면(X · Z 평균)", d1, "{{W_1D}}"], ["격자", P.d2[i][j], "{{W_2D}}"], ["측정 순서", P.dp[i][j], "{{W_SEQ}}"],
+  ] : [["측정 순서", total, "1"]];
+  $("s6-tab").innerHTML = `<tr><th>재료</th><th style="text-align:right">점수</th><th style="text-align:right">가중치</th></tr>` +
+    rows.map((r) => `<tr><td>${r[0]}</td><td class="n">${fmt(r[1], 3)}</td><td class="n">${r[2]}</td></tr>`).join("") +
+    `<tr><td><b>합친 점수</b> = 가중 평균</td><td class="n"><b>${fmt(total, 3)}</b></td><td></td></tr>` +
+    `<tr><td><b>거리</b> = 1 − 점수</td><td class="n"><b>${fmt(total === null ? null : 1 - total, 3)}</b></td><td class="cap">8단계 표의 이 칸</td></tr>` +
+    `<tr><td class="cap" colspan="3">실제 판: A는 묶음 ${a.run_no.skew ?? "없음"}, B는 묶음 ${b.run_no.skew ?? "없음"}${a.run_no.skew !== null && a.run_no.skew === b.run_no.skew ? " — 같은 묶음" : ""}</td></tr>`;
+}
+
+// ─── 7. 주성분 ────────────────────────────────────────────────────────────
+function renderS7() {
+  const P = D.pca, a = A(), b = Bq();
+  const none = !P || !a.pca;
+  $("s7-none").hidden = !none;
+  $("s7").querySelectorAll(".plane, .cols").forEach((e) => (e.hidden = none));
+  if (none) return;
+  const lay = P.layout, d = lay.reduce((s, x) => s + x.len, 0), nch = D.channels.length;
+  $("s7-d").textContent = fmtN(d);
+  // 막대 — 블록마다 폭 ∝ 값 수(아주 작은 블록은 최소 폭)
+  const W = 900, H = 46; let x = 0, g = "";
+  const wOf = (len) => Math.max(26, len / d * (W - 26 * lay.filter((l) => l.len / d * W < 26).length));
+  const tot = lay.reduce((s, l) => s + wOf(l.len), 0);
+  lay.forEach((l) => {
+    const w = wOf(l.len) / tot * W;
+    g += `<rect x="${x}" y="0" width="${w - 2}" height="${H - 16}" rx="4" fill="${PART_COL[l.part]}" opacity=".85"/>`;
+    if (w > 40) g += `<text x="${x + 5}" y="13" style="fill:#fff;font-size:10.5px;font-weight:600">${l.part === "amp" ? "크기" : MAT[l.mat]}</text><text x="${x + 5}" y="25" style="fill:#fff;font-size:10px">${l.len}개</text>`;
+    else g += `<text x="${x + 3}" y="18" style="fill:#fff;font-size:10px">${l.len}</text>`;
+    x += w;
+  });
+  g += Object.entries(PART).map(([k, t], i) => `<rect x="${i * 170}" y="${H - 11}" width="10" height="10" rx="2" fill="${PART_COL[k]}"/><text x="${i * 170 + 14}" y="${H - 2}" class="faint">${t}</text>`).join("");
+  $("s7-layout").innerHTML = `<svg viewBox="0 0 ${W} ${H}">${g}</svg><div class="cap">각 블록 안에서는 채널 ${D.channels.join(" · ")} 순으로 이어 붙였습니다(블록 값 수 = 채널 ${nch}개 × 자리 수).</div>`;
+  // 벡터
+  segs($("s7-view"), [["values", "② 전: 재료 값"], ["median", "범위의 중앙값(평소)"], ["resid", "② · ③ 후: 평소와 다른 정도 × 몫"]], st.pv, (k) => { st.pv = k; renderS7(); });
+  const vals = st.pv === "values" ? a.pca.values : st.pv === "median" ? P.median : a.pca.resid;
+  let pos = 0; const bands = lay.map((l) => { const bnd = { from: pos, to: pos + l.len, fill: PART_COL[l.part], label: l.part === "amp" ? "" : MAT[l.mat] }; pos += l.len; return bnd; });
+  const labOf = (j) => { let p = 0; for (const l of lay) { if (j < p + l.len) { const per = l.len / nch, ci = Math.floor((j - p) / per); return `${PART[l.part]}${l.part === "amp" ? "" : " · " + MAT[l.mat]} · 채널 ${D.channels[ci]} · ${(j - p) % per + 1}번째`; } p += l.len; } return ""; };
+  lineChart($("s7-vec"), { series: [{ vals, color: "var(--ink)", width: 1 }], h: 170, w: 900, bands, hover: (j) => {
+    $("s7-read").textContent = j === null ? "" : `${j + 1}번째 값 — ${labOf(j)}\n재료 값 ${fmt(a.pca.values[j], 3)} − 중앙값 ${fmt(P.median[j], 3)} = ${fmt(a.pca.values[j] === null ? 0 : a.pca.values[j] - P.median[j], 3)} → × 몫 = ${fmt(a.pca.resid[j], 4)}`;
+  } });
+  $("s7-read").textContent = "";
+  $("s7-fac").innerHTML = `<tr><th>블록</th><th style="text-align:right">값 수</th><th style="text-align:right">재료 몫</th><th style="text-align:right">곱하는 값 √(몫 ÷ 값 수)</th></tr>` +
+    lay.map((l, i) => { const w = D.consts.PCA_W[l.part] * (l.part === "amp" ? 1 : D.consts.PCA_MAT_W[D.kind][l.mat]); return `<tr><td><span class="sw" style="background:${PART_COL[l.part]}"></span> ${PART[l.part]}${l.part === "amp" ? "" : " · " + MAT[l.mat]}</td><td class="n">${l.len}</td><td class="n">${fmt(w, 3)}</td><td class="n">${fmt(P.factor[i], 4)}</td></tr>`; }).join("") +
+    `<tr><td class="cap" colspan="4">재료 몫: 채널별 모양 ${D.consts.PCA_W.shape} · 채널 간 편차 ${D.consts.PCA_W.skew} · 크기 ${D.consts.PCA_W.amp}${D.kind === "area" ? ` — 그 안에서 X ${D.consts.PCA_MAT_W.area.x} · Z ${D.consts.PCA_MAT_W.area.z} · 격자 ${D.consts.PCA_MAT_W.area.grid} · 측정 순서 ${D.consts.PCA_MAT_W.area.path}` : ""}</td></tr>`;
+  // 분산
+  const ex = P.explained, Wv = 420, Hv = 150; let gv = "", acc = 0;
+  const bw = (Wv - 40) / Math.max(ex.length, 1);
+  ex.forEach((e, i) => {
+    acc += e; const h = e * (Hv - 30) / Math.max(ex[0], .01);
+    gv += `<rect x="${30 + i * bw + 2}" y="${Hv - 18 - h}" width="${bw - 4}" height="${h}" rx="3" fill="#8658be" opacity="${i < 2 ? .9 : .5}"/><text x="${30 + i * bw + bw / 2}" y="${Hv - 5}" text-anchor="middle" class="faint">${i + 1}</text><text x="${30 + i * bw + bw / 2}" y="${Hv - 22 - h}" text-anchor="middle" style="font-size:10px">${Math.round(e * 100)}%</text>`;
+  });
+  $("s7-var").innerHTML = `<svg viewBox="0 0 ${Wv} ${Hv}">${gv}</svg>`;
+  $("s7-varcap").textContent = `남긴 축 ${P.kept}개가 범위 전체 분산의 ${Math.round(acc * 100)}%를 설명합니다(목표 {{PCA_VAR_PCT}}%, 최대 {{PCA_MAX_K}}개). 첫째 축이 가장 크게 갈리는 방향입니다.`;
+  $("s7-axes").innerHTML = P.axes.map((ax) => `<div class="cap"><b>${ax.axis}번째 축</b>(${Math.round(ax.explained * 100)}%)을 주로 만드는 것: ${ax.parts.slice(0, 3).map((p) => `${PART[p.part]} · ${p.channel} ${Math.round(p.share * 100)}%`).join(", ")}</div>`).join("");
+  renderScatter();
+  // 좌표 점수
+  const u = a.pca.coords || [], v = b.pca ? b.pca.coords || [] : [];
+  let uv = 0, uu = 0, vv = 0; u.forEach((x, k) => { uv += x * (v[k] || 0); uu += x * x; vv += (v[k] || 0) ** 2; });
+  const f = 2 * {{PCA_FLOOR}} * {{PCA_FLOOR}}, s = Math.max(-1, Math.min(1, (2 * uv + f) / (uu + vv + f)));
+  $("s7-calc").textContent = `A ${recName(st.a)} 좌표 = [${u.map((x) => fmt(x, 3)).join(", ")}]\nB ${recName(st.b)} 좌표 = [${v.map((x) => fmt(x, 3)).join(", ")}]\n` +
+    `점수 = (2·u·v + f) ÷ (|u|² + |v|² + f),  f = 2 × {{PCA_FLOOR}}² = ${fmt(f, 3)}\n     = (2 × ${fmt(uv, 4)} + ${fmt(f, 3)}) ÷ (${fmt(uu, 4)} + ${fmt(vv, 4)} + ${fmt(f, 3)}) = ${fmt(s, 3)}   (서버 값 ${fmt(D.methods.pca.score[st.a][st.b], 3)})\n` +
+    `A의 평소와 다른 정도(값 하나당 RMS) ${fmt(a.pca.parts && a.pca.parts.distance, 3)} — 가장 큰 몫: ${a.pca.parts ? a.pca.parts.parts.slice(0, 2).map((p) => `${PART[p.part]} · ${p.channel} ${Math.round(p.share * 100)}%`).join(", ") : "—"}`;
+}
+function runColorMap(method) {
+  const cnt = new Map();
+  for (const p of D.pca ? D.pca.scatter : []) { const no = p.run_no[method]; if (no !== null && no !== undefined) cnt.set(no, (cnt.get(no) || 0) + 1); }
+  for (const r of D.records) { const no = r.run_no[method]; if (no !== null && no !== undefined) cnt.set(no, (cnt.get(no) || 0) + 1); }
+  const order = [...cnt.entries()].sort((x, y) => y[1] - x[1]).map((e) => e[0]);
+  return (no) => (no === null || no === undefined) ? GRAY : order.indexOf(no) < CLU.length ? CLU[order.indexOf(no)] : GRAY;
+}
+function renderScatter() {
+  const P = D.pca, pts = P.scatter.filter((p) => p.xy && p.xy[0] !== null);
+  const col = runColorMap("pca");
+  const W = 420, H = 320, M = 26;
+  const xs = pts.map((p) => p.xy[0]), ys = pts.map((p) => p.xy[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const X = (v) => M + (v - x0) / ((x1 - x0) || 1) * (W - 2 * M), Y = (v) => H - M - (v - y0) / ((y1 - y0) || 1) * (H - 2 * M);
+  const sIdx = new Map(D.records.map((r, i) => [r.id, i]));
+  let g = `<line class="ax" x1="${M}" x2="${W - M}" y1="${Y(0)}" y2="${Y(0)}"/><line class="ax" x1="${X(0)}" x2="${X(0)}" y1="${M}" y2="${H - M}"/>`;
+  g += `<text x="${W - M}" y="${Y(0) - 4}" text-anchor="end" class="faint">1번째 축 →</text><text x="${X(0) + 4}" y="${M - 8}" class="faint">2번째 축 ↑</text>`;
+  for (const p of pts) if (!sIdx.has(p.id)) g += `<circle cx="${X(p.xy[0])}" cy="${Y(p.xy[1])}" r="2.4" fill="${col(p.run_no.pca)}" opacity=".55"/>`;
+  for (const p of pts) if (sIdx.has(p.id)) g += `<circle data-i="${sIdx.get(p.id)}" cx="${X(p.xy[0])}" cy="${Y(p.xy[1])}" r="4.6" fill="${col(p.run_no.pca)}" stroke="var(--plane)" stroke-width="1.2" style="cursor:pointer"/>`;
+  [[st.a, "A"], [st.b, "B"]].forEach(([i, t]) => {
+    const p = pts.find((q) => q.id === D.records[i].id); if (!p) return;
+    g += `<circle cx="${X(p.xy[0])}" cy="${Y(p.xy[1])}" r="9" fill="none" stroke="var(--ink)" stroke-width="1.8"/><text x="${X(p.xy[0]) + 11}" y="${Y(p.xy[1]) + 4}" style="font-weight:600">${t}</text>`;
+  });
+  $("s7-scatter").innerHTML = `<svg viewBox="0 0 ${W} ${H}">${g}</svg>`;
+  const svg = $("s7-scatter").querySelector("svg");
+  svg.querySelectorAll("circle[data-i]").forEach((c) => {
+    const i = +c.dataset.i, r = D.records[i];
+    c.addEventListener("pointerenter", () => ($("s7-sread").textContent = `${recName(i)} · 실제 판(pca) 묶음 ${r.run_no.pca ?? "없음"} · 좌표 (${fmt(r.pca && r.pca.coords[0], 3)}, ${fmt(r.pca && r.pca.coords[1], 3)})${r.label ? " · 라벨 " + r.label.join(", ") : ""}`));
+    c.addEventListener("click", () => { pick(i, null); renderCluster(); });
+  });
+}
+
+// ─── 8 · 9 · 10. 거리표 · 덴드로그램 · 결과 ─────────────────────────────────
+function tree(merges, n) {      // 합친 순서 → 이진 나무(남는 자리 = 작은 번호) + 잎 순서
+  const node = Array.from({ length: n }, (_, i) => ({ leaf: i, h: 0, size: 1 }));
+  for (const [h, a, b] of merges) node[a] = { l: node[a], r: node[b], h, size: node[a].size + node[b].size };
+  const root = node[0], order = [];
+  (function walk(t) { if (t.leaf !== undefined) order.push(t.leaf); else { walk(t.l); walk(t.r); } })(root);
+  return { root, order };
+}
+function cutLabels(n, merges, k) {   // shape._cut 과 같다
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  for (const [, a, b] of merges.slice(0, n - k)) { const ra = find(a), rb = find(b); parent[Math.max(ra, rb)] = Math.min(ra, rb); }
+  return Array.from({ length: n }, (_, i) => find(i));
+}
+function cutView() {
+  const M = D.methods[st.method], n = D.records.length;
+  const { root, order } = tree(M.merges, n);
+  const kmax = Math.max(2, ...M.curve.map((c) => c.k));
+  if (st.k === null) st.k = M.curve.length ? (M.clusters === 1 ? 1 : (M.curve.find((c) => c.real === M.clusters && Math.abs(c.silhouette - M.silhouette) < 1e-4) || { k: 2 }).k) : 1;
+  st.k = Math.max(1, Math.min(st.k, kmax));
+  const lab = cutLabels(n, M.merges, st.k);
+  const size = new Map(); lab.forEach((l) => size.set(l, (size.get(l) || 0) + 1));
+  const seen = []; order.forEach((i) => { const l = lab[i]; if (size.get(l) >= {{CLUSTER_MIN_SIZE}} && !seen.includes(l)) seen.push(l); });
+  const colOf = (l) => size.get(l) >= {{CLUSTER_MIN_SIZE}} ? CLU[seen.indexOf(l) % CLU.length] : GRAY;
+  return { M, n, root, order, kmax, lab, size, seen, colOf };
+}
+function renderCluster() {
+  segs($("s8-method"), [["skew", "잣대 ① 채널 간 편차"], ["pca", "잣대 ② 주성분"]], st.method, (k) => { st.method = k; st.k = null; renderCluster(); });
+  const cv = cutView();
+  renderHeat(cv); renderDendro(cv); renderS10(cv);
+}
+function renderHeat(cv) {
+  const { M, n, order, lab, colOf } = cv, S = 12, off = 30, W = off + n * S + 4, H = off + n * S + 4;
+  const dist = (i, j) => i === j ? 0 : (M.score[i][j] === null ? 1 : 1 - M.score[i][j]);
+  const runCol = runColorMap(st.method);
+  // 색 — 이 표의 거리 분포(5 … 95 백분위)에 맞춰 늘린다. 잣대마다 거리의 폭이 달라 고정 눈금이면 다 비슷한 색이 된다.
+  const offd = []; for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) offd.push(dist(i, j));
+  offd.sort((x, y) => x - y);
+  const q = (p) => offd[Math.min(offd.length - 1, Math.floor(p * offd.length))];
+  const lo = q(.05), hi = Math.max(q(.95), lo + 1e-6);
+  const alpha = (d) => (.04 + .92 * Math.max(0, Math.min(1, (hi - d) / (hi - lo)))).toFixed(3);
+  let g = "";
+  order.forEach((i, r) => order.forEach((j, c) => {
+    const d = dist(i, j), fill = `rgba(181,101,29,${alpha(d)})`;
+    g += `<rect x="${off + c * S}" y="${off + r * S}" width="${S - .4}" height="${S - .4}" fill="${fill}"/>`;
+  }));
+  order.forEach((i, r) => {
+    g += `<rect x="${off - 22}" y="${off + r * S}" width="8" height="${S - .5}" fill="${colOf(lab[i])}"/>`;
+    g += `<rect x="${off - 12}" y="${off + r * S}" width="8" height="${S - .5}" fill="${runCol(D.records[i].run_no[st.method])}"/>`;
+    g += `<rect x="${off + r * S}" y="${off - 12}" width="${S - .5}" height="8" fill="${colOf(lab[i])}"/>`;
+  });
+  // 갈린 무리 사각형
+  let s0 = 0;
+  for (let r = 1; r <= n; r++) {
+    if (r === n || lab[order[r]] !== lab[order[s0]]) {
+      g += `<rect x="${off + s0 * S}" y="${off + s0 * S}" width="${(r - s0) * S}" height="${(r - s0) * S}" fill="none" stroke="${colOf(lab[order[s0]])}" stroke-width="2"/>`;
+      s0 = r;
+    }
+  }
+  [[st.a, st.b], [st.b, st.a]].forEach(([i, j]) => { const r = order.indexOf(i), c = order.indexOf(j); g += `<rect x="${off + c * S}" y="${off + r * S}" width="${S}" height="${S}" fill="none" stroke="var(--ink)" stroke-width="2"/>`; });
+  g += `<rect class="hv" width="${S}" height="${S}" fill="none" stroke="var(--ink)" stroke-width="1.2" opacity="0"/>`;
+  $("s8-heat").innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="max-width:${Math.min(620, W * 1.4)}px;margin:0 auto">${g}</svg>`;
+  const svg = $("s8-heat").querySelector("svg"), hv = svg.querySelector(".hv");
+  const cell = (e) => { const b = svg.getBoundingClientRect(); const c = Math.floor(((e.clientX - b.left) / b.width * W - off) / S), r = Math.floor(((e.clientY - b.top) / b.height * H - off) / S); return (r >= 0 && c >= 0 && r < n && c < n) ? [r, c] : null; };
+  svg.addEventListener("pointermove", (e) => {
+    const rc = cell(e); if (!rc) return;
+    const [r, c] = rc, i = order[r], j = order[c];
+    hv.setAttribute("x", off + c * S); hv.setAttribute("y", off + r * S); hv.setAttribute("opacity", "1");
+    $("s8-read").textContent = `${recName(i)}(실제 판 묶음 ${D.records[i].run_no[st.method] ?? "없음"}) ↔ ${recName(j)}(실제 판 묶음 ${D.records[j].run_no[st.method] ?? "없음"}): 점수 ${fmt(i === j ? 1 : M.score[i][j], 3)} → 거리 ${fmt(dist(i, j), 3)}   — 누르면 A · B로`;
+  });
+  svg.addEventListener("click", (e) => { const rc = cell(e); if (!rc || order[rc[0]] === order[rc[1]]) return; pick(order[rc[0]], order[rc[1]]); renderCluster(); });
+  $("s8-read").textContent = "칸에 마우스를 올려 보세요.";
+  const mid = (lo + hi) / 2;
+  $("s8-leg").innerHTML = `<span class="chip"><span class="sw" style="background:rgba(181,101,29,${alpha(lo)})"></span>거리 ${fmt(lo, 2)} 이하(가까움)</span><span class="chip"><span class="sw" style="background:rgba(181,101,29,${alpha(mid)})"></span>${fmt(mid, 2)}</span><span class="chip"><span class="sw" style="background:rgba(181,101,29,${alpha(hi)});border:1px solid var(--line)"></span>${fmt(hi, 2)} 이상(멂)</span><span class="chip">색 눈금 = 이 표 거리의 5 … 95 백분위</span><span class="chip">왼쪽 띠: 이 표본의 갈림 · 실제 판 번호</span><span class="chip">검은 테: A · B</span>`;
+}
+function renderDendro(cv) {
+  const { M, n, root, order, kmax, lab, colOf } = cv;
+  $("s9-k").max = kmax; $("s9-k").value = st.k;
+  $("s9-kv").textContent = `k = ${st.k}`;
+  $("s9-k").oninput = (e) => { st.k = +e.target.value; renderCluster(); };
+  const W = 900, H = 300, L = 40, R = 10, T = 10, base = 230;
+  const hmax = Math.max(...M.merges.map((m) => m[0]), .01);
+  const X = (r) => L + (r + .5) * (W - L - R) / n, Y = (h) => base - h / hmax * (base - T);
+  const xOf = new Map(order.map((i, r) => [i, X(r)]));
+  const cutH = st.k <= 1 ? hmax * 1.02 : st.k >= n ? 0 : (M.merges[n - st.k - 1][0] + M.merges[n - st.k][0]) / 2;
+  let g = "";
+  for (const t of niceTicks(0, hmax, 4)) g += `<line class="ax" x1="${L}" x2="${W - R}" y1="${Y(t)}" y2="${Y(t)}" stroke-width=".5"/><text x="${L - 5}" y="${Y(t) + 3.5}" text-anchor="end" class="faint">${tickTxt(t)}</text>`;
+  g += `<text x="${L}" y="${T + 2}" class="faint" style="font-size:10px">합친 거리</text>`;
+  (function draw(t) {
+    if (t.leaf !== undefined) return { x: xOf.get(t.leaf), h: 0, leaves: [t.leaf] };
+    const a = draw(t.l), b = draw(t.r), leaves = a.leaves.concat(b.leaves);
+    const one = new Set(leaves.map((i) => lab[i])).size === 1;
+    const c = one ? colOf(lab[leaves[0]]) : "var(--ink-2)";
+    g += `<path d="M${a.x},${Y(a.h)} V${Y(t.h)} H${b.x} V${Y(b.h)}" fill="none" stroke="${c}" stroke-width="${one ? 1.8 : 1.1}"/>`;
+    return { x: (a.x + b.x) / 2, h: t.h, leaves };
+  })(root);
+  if (st.k > 1) g += `<line x1="${L}" x2="${W - R}" y1="${Y(cutH)}" y2="${Y(cutH)}" stroke="var(--warn)" stroke-dasharray="6 4" stroke-width="1.4"/><text x="${W - R}" y="${Y(cutH) - 4}" text-anchor="end" style="fill:var(--warn);font-size:11px">여기서 자르면 무리 ${st.k}개</text>`;
+  const runCol = runColorMap(st.method);
+  order.forEach((i, r) => {
+    g += `<text x="${X(r)}" y="${base + 13}" text-anchor="middle" style="font-size:10px" class="faint">${i + 1}</text>`;
+    g += `<rect x="${X(r) - 9}" y="${base + 19}" width="18" height="12" rx="2" fill="${colOf(lab[i])}"/>`;
+    g += `<rect x="${X(r) - 9}" y="${base + 35}" width="18" height="12" rx="2" fill="${runCol(D.records[i].run_no[st.method])}"/>`;
+    if (i === st.a || i === st.b) g += `<text x="${X(r)}" y="${base + 62}" text-anchor="middle" style="font-weight:600">${i === st.a ? "A" : "B"}</text>`;
+  });
+  g += `<text x="${L - 4}" y="${base + 29}" text-anchor="end" class="faint" style="font-size:10px">갈림</text><text x="${L - 4}" y="${base + 45}" text-anchor="end" class="faint" style="font-size:10px">실제 판</text>`;
+  $("s9-dendro").innerHTML = `<svg viewBox="0 0 ${W} ${H}">${g}</svg>`;
+  // 실루엣 곡선
+  const cur = M.curve, Ws = 900, Hs = 150, Ls = 40;
+  const kx = (k) => Ls + (k - 1) / Math.max(1, kmax - 1) * (Ws - Ls - 14);
+  const sv = cur.map((c) => c.silhouette), smax = Math.max(.1, ...sv), smin = Math.min(0, ...sv);
+  const sy = (v) => 12 + (smax - v) / (smax - smin) * (Hs - 40);
+  let gs = "";
+  for (const t of niceTicks(smin, smax, 3)) gs += `<line class="ax" x1="${Ls}" x2="${Ws - 14}" y1="${sy(t)}" y2="${sy(t)}" stroke-width="${t === 0 ? 1.1 : .5}"/><text x="${Ls - 5}" y="${sy(t) + 3.5}" text-anchor="end" class="faint">${tickTxt(t)}</text>`;
+  gs += `<path d="${cur.map((c, i) => `${i ? "L" : "M"}${kx(c.k)},${sy(c.silhouette)}`).join("")}" fill="none" stroke="var(--accent)" stroke-width="1.6"/>`;
+  const bestK = (cur.find((c) => c.real === M.clusters && Math.abs(c.silhouette - M.silhouette) < 1e-4) || {}).k;
+  cur.forEach((c) => {
+    const ok = c.real >= 2 && c.real <= {{CLUSTER_K_MAX}};
+    gs += `<circle data-k="${c.k}" cx="${kx(c.k)}" cy="${sy(c.silhouette)}" r="${c.k === st.k ? 6 : 4}" fill="${c.k === bestK ? "var(--accent)" : ok ? "var(--plane)" : GRAY}" stroke="var(--accent)" stroke-width="1.5" style="cursor:pointer"/>`;
+    gs += `<text x="${kx(c.k)}" y="${Hs - 12}" text-anchor="middle" class="faint" style="font-size:10px">${c.k}</text>`;
+  });
+  if (bestK) gs += `<text x="${kx(bestK)}" y="${sy(M.silhouette) - 10}" text-anchor="middle" style="fill:var(--accent);font-weight:600">고른 자리</text>`;
+  gs += `<text x="${Ws - 14}" y="${Hs - 1}" text-anchor="end" class="faint" style="font-size:10px">k(무리 수) →</text><text x="${Ls}" y="9" class="faint" style="font-size:10px">평균 실루엣</text>`;
+  $("s9-sil").innerHTML = `<svg viewBox="0 0 ${Ws} ${Hs}">${gs}</svg>`;
+  $("s9-sil").querySelectorAll("circle").forEach((c) => c.addEventListener("click", () => { st.k = +c.dataset.k; renderCluster(); }));
+  const cc = cur.find((c) => c.k === st.k);
+  $("s9-read").textContent = (cc ? `k = ${st.k}: 무리 ${st.k}개 중 {{CLUSTER_MIN_SIZE}}건 이상인 묶음 ${cc.real}개, 평균 실루엣 ${fmt(cc.silhouette, 3)}` : `k = ${st.k}: 모두 한 무리`) +
+    `\n서버가 고른 갈림: 묶음 ${M.clusters}개, 실루엣 ${fmt(M.silhouette, 3)}${bestK ? ` (k = ${bestK})` : " (어느 갈림도 0보다 크지 않아 한 묶음)"}`;
+}
+function renderS10(cv) {
+  const { n, lab, size, seen, colOf } = cv;
+  const groups = new Map(); lab.forEach((l, i) => { if (!groups.has(l)) groups.set(l, []); groups.get(l).push(i); });
+  const M = D.methods[st.method];
+  const dist = (i, j) => i === j ? 0 : (M.score[i][j] === null ? 1 : 1 - M.score[i][j]);
+  const rows = [...seen.map((l) => [l, groups.get(l)]), ...[...groups.entries()].filter(([l]) => size.get(l) < {{CLUSTER_MIN_SIZE}})];
+  const tally = (xs) => { const m = new Map(); xs.forEach((x) => m.set(x, (m.get(x) || 0) + 1)); return [...m.entries()].sort((a, b) => b[1] - a[1]); };
+  $("s10-tab").innerHTML = `<tr><th>이 표본의 무리</th><th style="text-align:right">기록 수</th><th>대표</th><th>실제 판 번호(${st.method === "skew" ? "채널 간 편차" : "주성분"})</th><th>라벨</th><th>기록</th></tr>` + rows.map(([l, ms], idx) => {
+    const real = size.get(l) >= {{CLUSTER_MIN_SIZE}};
+    const rep = ms.reduce((best, p) => (ms.reduce((s, q) => s + dist(p, q), 0) < ms.reduce((s, q) => s + dist(best, q), 0) ? p : best), ms[0]);
+    const runs = tally(ms.map((i) => D.records[i].run_no[st.method] ?? "없음")).map(([no, c]) => `${no}×${c}`).join(", ");
+    const labs = tally(ms.flatMap((i) => D.records[i].label || [])).map(([t, c]) => `${esc(t)}×${c}`).join(", ") || "—";
+    return `<tr><td><span class="chip"><span class="sw" style="background:${colOf(l)}"></span>${real ? "묶음 " + (seen.indexOf(l) + 1) : "잡음(묶이지 않음)"}</span></td><td class="n">${ms.length}</td><td class="mono">${real ? recName(rep) : "—"}</td><td class="mono">${runs}</td><td class="cap">${labs}</td><td class="mono cap">${ms.map(recName).join(" ")}</td></tr>`;
+  }).join("");
+}
+
+// ─── 시작 ─────────────────────────────────────────────────────────────────
+$("g").addEventListener("change", (e) => load(e.target.value));
+$("ra").addEventListener("change", (e) => { pick(+e.target.value, null); renderCluster(); });
+$("rb").addEventListener("change", (e) => { pick(null, +e.target.value); renderCluster(); });
+load(new URLSearchParams(location.search).get("group"));
+</script>
+</body>
+</html>

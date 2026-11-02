@@ -335,3 +335,24 @@ def test_pressing_rerun_again_keeps_cluster_numbers_and_says_what_changed(client
     ch = second["run"]["changes"]
     assert ch["joined"] == 1 and ch["moved"] == 0 and ch["new_clusters"] == 0
     assert second["run"]["id"] != first["run"]["id"]
+
+
+def test_the_flow_page_walks_real_records_through_every_step(client, dsn, fleet):
+    # 그림으로 따라가기 — 페이지는 숫자를 지금 상수로 채우고, 예시는 풀의 실제 기록으로 낸다 (SL-DOC-2)
+    assert client.get("/guide/example").status_code == 404           # 풀이 비면 보일 예시가 없다
+    page = client.get("/guide/flow")
+    assert page.status_code == 200 and "{{" not in page.text and "}}" not in page.text
+    assert 'href="guide/flow"' in client.get("/guide").text            # 읽는 법에서 건다
+    seed(dsn)
+    for n in put_files(fleet, 1, "p", synth.peak(), 4):
+        open_file(client, 1, n)
+    for n in put_files(fleet, 2, "e", synth.edge_drop(), 3):
+        open_file(client, 2, n)
+    rerun(client)
+    ex = client.get("/guide/example").json()
+    assert ex["n_group"] == 7 and len(ex["records"]) == 7 and ex["channels"]
+    rec = ex["records"][0]
+    assert {"raw", "norm", "dev", "centred", "run_no", "ref"} <= set(rec) and rec["run_no"]["skew"] is not None
+    assert ex["methods"]["skew"]["clusters"] == 2 and ex["runs"]["skew"]["clusters"] == 2
+    assert [g["key"] for g in ex["groups"]] == [ex["group"]]
+    assert client.get("/guide/example", params={"group": "없는|범위|"}).status_code == 404
