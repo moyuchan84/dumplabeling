@@ -223,3 +223,21 @@ def test_the_guide_is_served_with_the_numbers_the_code_uses(client):
     assert "평균 연결" in r.text and "실루엣" in r.text and f"(2·u·v + f)" in r.text
     for anchor in ("skew", "pca", "path", "detail", "method", "limits"):          # 화면이 절로 바로 건다 (poc_viewer DUMP-CLU-18)
         assert f'id="{anchor}"' in r.text
+
+
+def test_the_guide_has_three_tabs_and_the_storage_page_names_every_table(client):
+    """읽는 법 · 분석 흐름 · 저장 구조가 같은 탭 줄을 달고, 저장 구조는 마이그레이션의 모든 테이블을 말한다 (SL-DOC-3)."""
+    import pathlib
+    import re
+    for path, current in (("/guide", "읽는 법"), ("/guide/flow", "그림으로 따라가기"), ("/guide/db", "저장 구조")):
+        r = client.get(path)
+        assert r.status_code == 200 and "{{" not in r.text, path
+        assert r.text.count(' aria-current="page">') == 1 and f'aria-current="page">{current}' in r.text, path
+        assert all(label in r.text for label in ("읽는 법", "그림으로 따라가기", "저장 구조")), path
+    db = client.get("/guide/db").text
+    sql = "\n".join(p.read_text(encoding="utf-8")
+                    for p in pathlib.Path(shape.__file__).parents[2].joinpath("data", "migrations").glob("*.sql"))
+    tables = set(re.findall(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+)", sql)) - {"_taxonomy", "_now"}
+    missing = sorted(t for t in tables if t not in db)
+    assert not missing, f"tables the storage page does not mention: {missing}"
+    assert f'"version": {shape.FEATURE_VERSION}' in db and f"{shape.GRID_N}×{shape.GRID_N}" in db

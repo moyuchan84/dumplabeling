@@ -90,11 +90,12 @@ button.seg[aria-pressed="true"] { border-color: var(--accent); background: var(-
 .state { padding: 24px; text-align: center; color: var(--ink-2); }
 nav.toc { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 14px; }
 @media (max-width: 640px) { .arrow { display: none; } }
+{{TABS_CSS}}
 </style>
 </head>
 <body>
+{{TABS}}
 <div class="bar"><div class="in">
-  <a href="../guide" style="font-size:13px">← 읽는 법</a>
   <label>범위 <select id="g"></select></label>
   <label><span class="sw" style="background:var(--accent)"></span>기록 A <select id="ra"></select></label>
   <label><span class="sw" style="background:var(--ink-2)"></span>기록 B <select id="rb"></select></label>

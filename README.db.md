@@ -1,5 +1,7 @@
 # scanlabel — 데이터베이스 (무엇이 어떻게 저장되나)
 
+> 화면판: 서버의 `GET /guide/db`(「읽는 법」의 세 번째 탭). 이 문서는 컬럼 표 · 조회 SQL 까지 있는 개발자용입니다.
+
 scanlabel 이 PostgreSQL 에 **무엇을, 언제, 어떤 모양으로** 남기는지 설명합니다. 컬럼의 정본은
 `scanlabel/data/migrations/*.sql`(번호 붙은 전진 전용 SQL)이고, 이 문서는 그것을 읽는 사람을 위한 지도입니다.
 저장 코드는 `scanlabel/data/repository.py`(`Store`, 원시 SQL — ORM 없음), 스키마 이동은 `scanlabel/data/migrate.py` 입니다.
