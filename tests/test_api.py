@@ -219,5 +219,7 @@ def test_the_guide_is_served_with_the_numbers_the_code_uses(client):
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
     assert "{{" not in r.text and "}}" not in r.text
     assert f"{shape.GRID_N}×{shape.GRID_N}" in r.text and f"2 … {shape.CLUSTER_K_MAX}개" in r.text
-    for anchor in ("skew", "pca", "path", "detail"):          # 화면이 절로 바로 건다 (poc_viewer DUMP-CLU-18)
+    # 엔지니어용 — 알고리즘 · 변환 · 한계(2026-11-02 사용자 요청)
+    assert "평균 연결" in r.text and "실루엣" in r.text and f"(2·u·v + f)" in r.text
+    for anchor in ("skew", "pca", "path", "detail", "method", "limits"):          # 화면이 절로 바로 건다 (poc_viewer DUMP-CLU-18)
         assert f'id="{anchor}"' in r.text

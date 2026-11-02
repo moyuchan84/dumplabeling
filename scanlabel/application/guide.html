@@ -71,7 +71,8 @@ nav.toc a, a { color: var(--accent); }
     <a href="#purpose">1 목적</a><a href="#direction">2 방향</a><a href="#flow">3 흐름</a><a href="#usage">4 활용</a>
     <a href="#screen">5 화면 읽기</a><a href="#path">6 그래프</a><a href="#cluster">7 묶는 법</a>
     <a href="#skew">8 잣대 — 채널 간 편차</a><a href="#pca">9 잣대 — 주성분</a><a href="#data">10 데이터</a>
-    <a href="#updates">11 바뀐 것</a><a href="#faq">12 자주 묻는 것</a>
+    <a href="#method">11 분석 방법 상세(엔지니어용)</a><a href="#limits">12 한계 · 보완할 점</a>
+    <a href="#updates">13 바뀐 것</a><a href="#faq">14 자주 묻는 것</a>
   </nav>
 </header>
 
@@ -241,8 +242,91 @@ nav.toc a, a { color: var(--accent); }
   </ul>
 </section>
 
+<section id="method">
+  <div class="head"><h2>11. 분석 방법 상세 — 엔지니어용</h2><span class="tag">데이터 변환 · 알고리즘 · 파라미터</span></div>
+  <p>어떤 데이터를 어떻게 바꿔서, 어떤 알고리즘으로 묶었는지 단계별로 적은 것입니다. 괄호 안은 코드 위치(<code>scanlabel/processing/shape.py</code>)입니다.</p>
+
+  <h3>11-1. 데이터 변환 (기록 1건 → 스냅샷)</h3>
+  <ol>
+    <li><b>입력</b> — fleet 의 Dump raw 기록 1건: <code>value{채널: [v₀ … v_m]}</code>, <code>xyz{x, z}</code>, 메타(<code>scan_enum · chuck_id · sensor_id</code>). fleet 캐시만 읽음(<code>source: "cache"</code>).</li>
+    <li><b>점 읽기</b> (<code>num</code>) — 숫자 문자열은 숫자로, <code>""</code> · <code>null</code> · NaN 은 버림(0 으로 바꾸지 않음). 값 · x · z 중 하나라도 못 읽으면 그 점을 버림.</li>
+    <li><b>통계</b> (<code>_stats</code>) — 채널마다 점 개수 · 최소 · 최대 · 평균 μ · 표준편차 σ(모집단).</li>
+    <li><b>측정 순서 곡선</b> (<code>_resample</code>) — 점을 측정 순서 그대로 {{PATH_N}}칸으로: 점이 {{PATH_N}}개 이상이면 j번째 칸 = 점 [j·m/{{PATH_N}}, (j+1)·m/{{PATH_N}}) 구간의 <b>평균</b>, 적으면 선형 보간. 가로축 = 측정 진행률.</li>
+    <li><b>칸</b> (<code>_grid</code>) — x · z 를 각자 최소~최대로 0~1 에 맞춘 뒤 {{GRID_N}}×{{GRID_N}} 칸(행 = z, 열 = x)에 든 점의 평균. 빈 칸 = 없음. 점들이 한 줄 · 한 점이면 칸이 없음 → <b>선 스캔</b>으로 취급.</li>
+    <li><b>저장</b> — 채널별 (곡선, 칸, 통계)만 DB 풀(<code>scan_records.features</code>)에 남김. 원본 없이 다시 계산 가능. 모양이 바뀌면 <code>FEATURE_VERSION</code> 을 올리고 <code>jobs refeature</code>.</li>
+  </ol>
+
+  <h3>11-2. 채널 간 편차 점수 (잣대 ①, 기본)</h3>
+  <ol>
+    <li><b>채널 정규화</b> (<code>_skew_norm</code>) — 칸 · 곡선의 값을 그 채널의 z = (v − μ) ÷ σ 로. 단위가 다른 채널을 한 자로 재기 위해. 평평한 채널(σ ≈ 0)은 0 선.</li>
+    <li><b>단면</b> (<code>profiles</code>) — 정규화한 칸에서 X 단면 = 열마다 평균({{GRID_N}}점), Z 단면 = 행마다 평균.</li>
+    <li><b>편차</b> (<code>_skew_dev</code>) — 재료(X 단면 · Z 단면 · 칸 · 곡선)의 자리 j 마다 d<sub>c</sub>(j) = z<sub>c</sub>(j) − (그 자리 채널들의 평균). 한 채널이라도 빈 자리는 건너뜀.</li>
+    <li><b>기준선 빼기</b> (<code>skew_baseline</code>) — 범위에서 가장 흔한 (스캔 종류, 채널 집합)의 기록들로 자리마다 d 의 <b>중앙값</b> b<sub>c</sub>(j)를 내고, u = d − b. 늘 있는 채널 간 차이를 지우고 「이 기록만의 어긋남」만 남김.</li>
+    <li><b>재료별 점수</b> (<code>_skew_score</code>) — 두 기록의 u, v 로 <code>s = (2·u·v + f) ÷ (|u|² + |v|² + f)</code>, <code>f = 2·n·{{SKEW_FLOOR}}²</code>(n = 공통 값 수). 자리 · 방향 · 크기가 같으면 1, 둘 다 작으면 1 쪽, 한쪽만 크면 0 쪽, 반대면 −1. 공통 자리가 단면 {{PROFILE_MIN}} · 칸 {{MIN_OVERLAP}} 미만이면 그 재료는 점수 없음.</li>
+    <li><b>합치기</b> (<code>skew_similarity</code>) — 면 스캔: (W<sub>1D</sub>·평균(s<sub>X</sub>, s<sub>Z</sub>) + W<sub>2D</sub>·s<sub>칸</sub> + W<sub>SEQ</sub>·s<sub>곡선</sub>) ÷ 가중치 합, 가중치 {{W_1D}} · {{W_2D}} · {{W_SEQ}}(있는 재료만). 선 스캔: s<sub>곡선</sub>. 공통 채널이 2개 미만이거나 면/선이 다르면 비교 불가.</li>
+    <li><b>거리</b> — D = 1 − s (0 같음 … 2 반대). 비교 불가인 쌍은 1(상관없음).</li>
+  </ol>
+
+  <h3>11-3. 주성분 점수 (잣대 ②)</h3>
+  <ol>
+    <li>범위마다, 가장 흔한 (종류, 채널 집합)의 기록으로 모델을 만든다(<code>pca_model</code>).</li>
+    <li>기록 1건 → 한 줄 벡터: [채널별 정규화 재료 − 범위의 자리별 중앙값](모양) + [편차 u](채널 간 편차) + [채널별 log σ − 중앙값](크기). 칸은 {{PCA_GRID}}×{{PCA_GRID}}, 곡선은 {{PCA_PATH}}칸으로 줄임.</li>
+    <li>몫: 모양 {{PCA_W_SHAPE}} · 편차 {{PCA_W_SKEW}} · 크기 {{PCA_W_AMP}}; 면 스캔 안에서 X {{PCA_MAT_X}} · Z {{PCA_MAT_Z}} · 칸 {{PCA_MAT_GRID}} · 곡선 {{PCA_MAT_PATH}}. 값 하나당 RMS 로 맞춤.</li>
+    <li>부분공간 반복 + Rayleigh–Ritz 로 주성분을 뽑아, 분산의 {{PCA_VAR_PCT}}%까지(최소 2, 최대 {{PCA_MAX_K}}개) 남김. 부호는 가장 큰 적재값이 양수가 되게 고정(결정적).</li>
+    <li>두 기록의 점수 = 좌표 u, v 로 위와 같은 꼴, <code>f = 2·{{PCA_FLOOR}}²</code>. 모델 밖(다른 채널 구성) 기록은 비교 불가.</li>
+  </ol>
+
+  <h3>11-4. 묶기 알고리즘 (<code>cluster</code> · <code>best_cut</code>)</h3>
+  <ul>
+    <li><b>종류</b> — 응집형 계층 묶기(agglomerative hierarchical clustering), <b>평균 연결(average linkage, UPGMA)</b>.</li>
+    <li><b>입력</b> — 범위 하나의 거리 행렬 D(n×n, 위 11-2 또는 11-3). 범위 = (스캔 종류, 척, 센서). 범위 사이는 비교하지 않음.</li>
+    <li><b>합치기</b> (<code>_linkage</code>) — NN-chain 방식: 서로 가장 가까운 두 무리를 합치고, 새 무리와 나머지의 거리는 Lance–Williams 식 <code>d(A∪B, C) = (|A|·d(A,C) + |B|·d(B,C)) ÷ (|A| + |B|)</code>(= 구성원 쌍 거리의 평균). 시간 · 메모리 O(n²).</li>
+    <li><b>자를 자리</b> (<code>best_cut</code>) — 덴드로그램을 무리 2 … 4×{{CLUSTER_K_MAX}}개로 잘라 보고, 각 자리의 <b>평균 실루엣</b> s(i) = (b − a) ÷ max(a, b)를 잰다(a = 제 무리 평균 거리, b = 가장 가까운 남의 무리 평균 거리). {{CLUSTER_MIN_SIZE}}건 미만 무리는 <b>잡음</b>: 그 기록은 0 으로 평균에 들고, 남의 무리(b)로는 세지 않음. 묶음이 될 무리가 2 … {{CLUSTER_K_MAX}}개인 자리 중 실루엣 최대(동점은 적은 쪽). 최대가 0 이하면 범위 전체 = 한 묶음.</li>
+    <li><b>정리</b> — {{CLUSTER_MIN_SIZE}}건 미만 무리 · 누구와도 비교 불가인 기록 = 「묶이지 않음」. 대표 = medoid(무리 안 거리 합 최소). 구성원 점수 = 대표와의 s.</li>
+    <li><b>번호</b> — (이번 묶음, 지난 번호) 짝마다 공통 구성원 수를 세어 많은 짝부터 지난 번호를 물려줌(번호마다 한 번). 나머지는 새 번호. 같은 풀 → 같은 결과(결정적).</li>
+    <li><b>입력 상한</b> — 범위마다 라벨된 기록 전부 + 라벨 없는 기록 최근 {{CLUSTER_MAX_N}}건(쌍 비교가 n²).</li>
+    <li><b>분류</b> (<code>cluster_category</code>) — 라벨된 구성원의 라벨을 조상까지 세어, 단계마다 1위가 {{CLUSTER_AGREE_PCT}}% 이상 · 2위보다 많음 · 윗단계 합의의 자식이면 합의.</li>
+  </ul>
+
+  <h3>11-5. 지도 · 평균 그래프</h3>
+  <ul>
+    <li><b>지도</b> (<code>cluster_map</code>) — 채널 간 편차: landmark MDS. 서로 가장 먼 기록 {{MAP_LANDMARKS}}개(max-min)로 고전 MDS 를 풀고, 나머지는 그 기준점까지의 거리만으로 투영(근사). 주성분: 첫째 · 둘째 좌표 그대로.</li>
+    <li><b>평균 그래프</b> (<code>draw_shape</code> · <code>mean_shape</code>) — 구성원마다 곡선 · 칸을 채널별 (v − μ) ÷ σ 로 맞춘 뒤 자리마다 평균, 띠 = 25 · 75 백분위. 구성원 절반 이상에 있는 채널만. 목록 · 지도용은 {{DRAW_THIN}}점으로 줄임. 다시 묶을 때 계산해 <code>cluster_shapes</code> 에 저장.</li>
+  </ul>
+
+  <h3>11-6. 확인하는 법</h3>
+  <ul>
+    <li><code>python -m scanlabel.application.jobs cluster</code> — 다시 묶고, 잣대마다 라벨된 기록으로 잰 <b>순도</b>(단계별) · <b>덮음</b>(라벨된 기록 중 묶인 비율)과 두 잣대가 얼마나 같게 갈랐는지(<b>adjusted Rand</b>)를 출력.</li>
+    <li><code>python -m scanlabel.application.jobs eval</code> — 라벨 제안(모양 유사도)의 leave-one-out 정확도.</li>
+    <li>현재 값(로컬 풀 5,044건, 데모 채널 A/B, 라벨 714): 채널 간 편차 — 묶음 116 · 묶이지 않음 27 · 순도 대 0.982 / 중 0.980 / 소 0.855, 35초. 주성분 — 61 · 24 · 0.985 / 0.985 / 1.0.</li>
+    <li>정본 요구사항: scanlabel <code>SPEC.md</code> SL-FEAT · SL-CLU-2 · SL-CLU-9 · SL-CLU-10 · SL-CLU-13 · SL-DRAW · SL-MAP.</li>
+  </ul>
+</section>
+
+<section id="limits">
+  <div class="head"><h2>12. 한계와 보완할 점</h2><span class="tag">검토 · 개선 후보</span></div>
+  <div class="scroll"><table>
+    <thead><tr><th>한계</th><th>왜 생기나 · 영향</th><th>보완 방향</th></tr></thead>
+    <tbody>
+      <tr><td><b>실데이터 검증 전</b></td><td>지금 숫자는 데모 채널 A/B 와 모양 기준으로 붙인 라벨로 잰 것. tr · txh · tyh 실제 오류에서의 순도는 모름</td><td>실제 기록에 라벨을 붙인 뒤 <code>jobs cluster</code> 로 두 잣대 · 상한 8 / 12 / 20 의 순도를 비교해 기본값 결정</td></tr>
+      <tr><td><b>측정 순서 곡선이 거침</b></td><td>{{PATH_N}}칸 구간 평균 → 한 칸에 수 점이 섞여 행 단위의 빠른 변동 · 짧은 스파이크가 묽어짐. 대시보드보다 부드럽게 보이는 이유</td><td>칸 수 늘리기(<code>FEATURE_VERSION</code> 올리고 refeature), 또는 칸마다 최소 · 최대도 보관</td></tr>
+      <tr><td><b>진행률 정렬</b></td><td>점 개수 · 행 수가 다르면 같은 진행률이 다른 위치. 범위로 나눠 줄였지만 완전하지 않음</td><td>행(라인) 단위로 나눠 맞추기 — 스캔 경로 정보(행 전환 지점)를 fleet 에서 받기</td></tr>
+      <tr><td><b>크기 정보를 버림</b></td><td>채널마다 표준편차로 나누므로, 게인 · 오프셋만 다른 이상은 채널 간 편차로는 안 잡힘</td><td>주성분 잣대(크기 포함)와 함께 보기, 또는 채널별 σ · μ 비교를 별도 지표로</td></tr>
+      <tr><td><b>기준선 = 범위 중앙값</b></td><td>한 오류가 범위의 과반이면 그 오류가 「평소」가 되어 지워짐</td><td>정상으로 확인된 기록만으로 기준선을 내기(정상 라벨 필요)</td></tr>
+      <tr><td><b>평균 연결 + 실루엣의 성질</b></td><td>밀도가 다른 무리가 섞이면 큰 무리 쪽으로 합쳐지기 쉽고, 실루엣은 둥근 무리를 선호. 경계 기록도 어느 한쪽에 강제로 들어감</td><td>밀도 기반(HDBSCAN 류) 비교 — 지금은 표준 라이브러리만 쓰는 제약이 있어 numpy 도입 여부부터 결정</td></tr>
+      <tr><td><b>묶음 수 상한 {{CLUSTER_K_MAX}}</b></td><td>화면 가독성 상한. 실제 유형이 더 많으면 닮지 않은 것이 한 묶음에 섞임 — <b>띠가 넓은 묶음</b>이 그 신호</td><td>띠가 넓은 묶음만 다시 나눠 보는 「하위 묶기」 기능</td></tr>
+      <tr><td><b>소속 확신도 없음</b></td><td>묶음 경계에 걸친 기록도 다른 구성원과 똑같이 보임 → 라벨 일괄 적용 때 섞일 수 있음</td><td>기록마다 실루엣 값을 저장 · 표시하고, 낮은 기록은 일괄 붙이기에서 빼기</td></tr>
+      <tr><td><b>입력 상한 {{CLUSTER_MAX_N}}건</b></td><td>라벨 없는 기록은 범위마다 최근 것만 → 오래된 드문 유형이 빠질 수 있음. 쌍 비교라 n² 시간</td><td>대표 표본 + 나머지는 가장 가까운 묶음에 배정하는 2단계 방식</td></tr>
+      <tr><td><b>채널 구성이 다른 기록</b></td><td>공통 채널만으로 비교하고 기준선을 빼지 않음 → 점수 기준이 섞임</td><td>채널 구성도 범위 키에 넣거나, 구성별로 기준선 저장</td></tr>
+      <tr><td><b>지도는 근사</b></td><td>landmark MDS 는 거리 순서만 대체로 지킴 — 가까워 보여도 다른 묶음일 수 있음</td><td>판단은 묶음 번호 · 점수로. 필요하면 범위별 전체 MDS(n 이 작을 때)</td></tr>
+      <tr><td><b>시간 · 장비 상태 미반영</b></td><td>언제 · 어느 장비 상태에서 났는지는 묶기에 안 들어감</td><td>묶음별 발생 시각 · 장비 분포를 함께 보여 주기(Overview 의 이벤트와 연결)</td></tr>
+      <tr><td><b>분류 합의 {{CLUSTER_AGREE_PCT}}% 고정</b></td><td>라벨이 적은 묶음은 한두 건으로 분류가 정해질 수 있음</td><td>라벨 수 최소 조건 추가, 또는 합의 몫을 함께 표시(지금 단계별로 보임)</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
 <section id="updates">
-  <div class="head"><h2>11. 바뀐 것</h2><span class="tag">2026-11-02</span></div>
+  <div class="head"><h2>13. 바뀐 것</h2><span class="tag">2026-11-02</span></div>
   <ul>
     <li><b>점수 문턱(0.8) 없앰</b> — 「대표와 0.8 이상」 → 문턱 없는 계층 묶기(7). 로컬 풀 5,044건 기준 묶음 318 → 116, 묶이지 않음 207 → 27.</li>
     <li><b>그래프를 대시보드와 같게</b> — X 단면 · Z 단면 · 채널 간 편차 · 펼친 경로 그림을 빼고 「경로 겹쳐 보기」 + 「실공간 맵」으로 통일. 채널 색도 같게.</li>
@@ -255,7 +339,7 @@ nav.toc a, a { color: var(--accent); }
 </section>
 
 <section id="faq">
-  <div class="head"><h2>12. 자주 묻는 것</h2></div>
+  <div class="head"><h2>14. 자주 묻는 것</h2></div>
   <div class="grid">
     <div class="plane"><h3>그래프가 대시보드보다 뭉쳐 보인다</h3><p>채널마다 세로를 평균 0 · 표준편차 1로 맞춰 한 장에 겹쳤기 때문. 편차 그래프를 합친 것이 아니다. 원래 크기는 「원본 열기 ↗」.</p></div>
     <div class="plane"><h3>모양이 똑같아 보이는데 다른 묶음이다</h3><p>채널 간 편차 잣대는 한 채널의 모양이 아니라 <b>채널끼리 어긋남</b>을 본다. 선들이 <b>어느 구간에서 갈라지는지</b> 견줘 보자.</p></div>

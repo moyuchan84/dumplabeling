@@ -34,7 +34,8 @@ def guide_values() -> dict[str, str]:
     area = shape.PCA_MAT_W["area"]
     vals = {n: getattr(shape, n) for n in (
         "GRID_N", "PATH_N", "CLUSTER_K_MAX", "CLUSTER_MIN_SIZE", "CLUSTER_MAX_N", "SKEW_FLOOR",
-        "W_1D", "W_2D", "W_SEQ", "PCA_PATH", "PCA_MAX_K", "MAP_LANDMARKS")}
+        "W_1D", "W_2D", "W_SEQ", "PCA_PATH", "PCA_MAX_K", "MAP_LANDMARKS", "PROFILE_MIN", "MIN_OVERLAP",
+        "DRAW_THIN", "PCA_FLOOR", "PCA_GRID")}
     vals.update(CLUSTER_AGREE_PCT=pct(shape.CLUSTER_AGREE), PCA_VAR_PCT=pct(shape.PCA_VAR),
                 PCA_W_SHAPE=shape.PCA_W["shape"], PCA_W_SKEW=shape.PCA_W["skew"], PCA_W_AMP=shape.PCA_W["amp"],
                 PCA_MAT_X=area["x"], PCA_MAT_Z=area["z"], PCA_MAT_GRID=area["grid"], PCA_MAT_PATH=area["path"])
