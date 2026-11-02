@@ -397,6 +397,25 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   stale number. Sections carry stable anchors (`#skew` · `#pca` · `#path` · `#detail` …) that poc_viewer links to
   (`DUMP-CLU-18`). [test: "test_the_guide_is_served_with_the_numbers_the_code_uses"]
   `docs/cluster-logic.html` stays the developer's walk through the code (request flow, tables), not the reader's guide.
+- `SL-DOC-2` **The flow is shown on real records** (2026-11-02, the user: 「어떤 데이터로 pca를 하는지, 어떤 preprocessing 후
+  어떻게 데이터롤 clustering 하는ㄴ지가 눈에 잘 안들어오는데 다이어그램, 인터렉티브, 실제 예시 데이터르 ㄹ통해서 데이터 변화,
+  흐름등에 대해서 설명을 다시 해줘서 누가든던지 애해할수있게」 — prose and formulas were not enough; show the data changing,
+  step by step, on real examples). `GET /guide/flow` serves `application/guide_flow.html`, an interactive page (inline SVG,
+  no script from a CDN) linked from the guide's head and §11: 0 the flow diagram with the range's real sizes · 1 raw →
+  snapshot · 2 per-channel z-score · 3 grid → X/Z profiles · 4 channel skew · 5 minus the range's median · 6 the pair score
+  recomputed from the drawn values beside the server's · 7 the PCA row (layout, median, weights, explained variance, the
+  range's PC1/PC2 scatter, the coordinate score) · 8 the distance table in dendrogram order · 9 the dendrogram with a
+  movable cut and the silhouette per k · 10 the cut against the real run's numbers and the labels.
+  Its data is `GET /guide/example` → `shape.walkthrough`: the baseline and the PCA model are the **whole range's** (the
+  stored PCA projection when the latest pca run has one), a sample of `WALK_SAMPLE` records is drawn by `walk_sample`
+  (evenly from the real skew run's `WALK_CLUSTERS` largest clusters plus a few unclustered), and `best_cut` is re-run on
+  the sample's own distances — so the page says the sample's cut may differ from the real run, and shows both. The page
+  draws and recomputes for display only; it adds no judgement (`SL-ROLE-3`). The API process caches up to 8 answers
+  keyed by (set, range, pool size, run ids).
+  Validation (2026-11-02, local pool, `COARSEHORVERT_SCAN|IS_CH1|IS_3`, 305 records): the 36-record sample drawn from
+  the skew run's clusters 101 · 329 · 332 · 333 re-cuts into exactly those four (silhouette 0.504); first answer 1.9 s,
+  cached 0.4 s, ~1 MB.
+  [test: "test_the_flow_page_walks_real_records_through_every_step" · "test_walkthrough_recuts_a_sample_like_the_real_run"]
 
 ## Cluster map (SL-MAP)
 

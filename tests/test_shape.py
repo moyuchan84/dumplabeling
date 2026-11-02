@@ -608,3 +608,40 @@ def test_a_stray_record_does_not_decide_the_cut():
     assert k == 2
     assert len({got[i] for i in range(6)}) == 1 and len({got[i] for i in range(6, 11)}) == 1
     assert got[0] != got[6] and got[11] not in (got[0], got[6])     # 떨어진 하나는 따로(→ 「묶이지 않음」)
+
+
+# ─── 읽는 법의 실제 예시 (SL-DOC-2) ──────────────────────────────────────────
+
+def test_walkthrough_recuts_a_sample_like_the_real_run():
+    recs = scope()
+    group = [{"id": i, "features": f, "scan_enum": "S", "chuck_id": "", "sensor_id": ""} for i, (_, f) in enumerate(recs)]
+    run = shape.cluster(group)
+    run_no = {m["id"]: c["no"] for c in run["clusters"] for m in c["members"]}
+    sample = shape.walk_sample([g["id"] for g in group], run_no)
+    assert sorted(sample) == list(range(len(group)))                # 표본이 범위보다 크면 전부
+    assert shape.walk_sample(list(range(100)), {}, 10) == list(range(0, 100, 10))    # 판이 없으면 고르게
+    w = shape.walkthrough(group, sample)
+    base = shape.skew_baseline(g["features"] for g in group)
+    feats_ = {g["id"]: g["features"] for g in group}
+    # 단계마다 값은 묶을 때 쓰는 함수가 낸 그대로다 — 이 페이지가 새로 판단하지 않는다
+    for rec in w["records"]:
+        assert rec["centred"] == shape.skew_profiles(feats_[rec["id"]], base)
+        assert rec["dev"] == shape.skew_profiles(feats_[rec["id"]], None)
+        assert rec["raw"]["txh"]["stats"]["n"] == feats_[rec["id"]]["channels"]["txh"]["stats"]["n"]
+    i, j = 5, 8
+    want = shape.skew_similarity(shape.prepare_skew(feats_[sample[i]], base), shape.prepare_skew(feats_[sample[j]], base))
+    assert w["methods"]["skew"]["score"][i][j] == round(want["score"], 4)
+    assert w["methods"]["skew"]["parts"]["dx"][i][j] == round(want["dx"], 4)
+    # 표본 = 범위 전체이니 갈림도 실제 판과 같다
+    sk = w["methods"]["skew"]
+    got = {}
+    for p, lab in enumerate(sk["labels"]):
+        got.setdefault(lab, set()).add(sample[p])
+    real = [set(m["id"] for m in c["members"]) for c in run["clusters"]]
+    assert all(r in got.values() for r in real) and sk["clusters"] == len(real)
+    assert len(sk["merges"]) == len(sample) - 1 and sk["curve"][0]["k"] == 2
+    # 주성분 — 범위 전체의 투영식, 표본마다 줄 · 좌표
+    assert w["pca"]["kept"] >= 1 and len(w["pca"]["scatter"]) == len(group)
+    d = sum(b["len"] for b in w["pca"]["layout"])
+    assert all(len(r["pca"]["resid"]) == d and r["pca"]["coords"] for r in w["records"])
+    assert set(w["baseline"]) == {"tr", "txh", "tyh"} and set(w["baseline"]["tr"]) == {"x", "z", "line", "grid"}

@@ -317,6 +317,26 @@ RMS) · 어디서(`parts`, (재료, 채널)별 몫) 다른지, `vs.pca_similarit
 무엇이고 점수에 쓰이는지를 설명합니다. 문턱 · 가중치는 요청할 때 지금 상수로 채웁니다. 절마다 고정 앵커가 있어
 (`#flow` · `#data` · `#materials` · `#skew` · `#pca` · `#cluster` · `#map` · `#detail` · `#path` · `#faq`) 화면이 그 절로 바로 겁니다.
 
+## `GET /guide/flow` · `GET /guide/example` — 그림으로 따라가기
+
+`/guide/flow` 는 대화형 HTML(SL-DOC-2): 지금 풀의 실제 기록으로 원본 → 요약 → 정규화 → 단면 → 채널 간 편차 → 평소 빼기 →
+쌍 점수 → 주성분 → 거리표 → 덴드로그램 · 실루엣 → 결과를 단계마다 그립니다. 데이터는 같은 경로의 `example` 을 읽습니다.
+
+`GET /guide/example?set_name=dump&group=<스캔종류|척|센서>` — `group` 을 비우면 기록이 가장 많은 범위.
+
+| 키 | 뜻 |
+|---|---|
+| `groups` · `group` · `n_group` | 고를 수 있는 범위(크기 순)와 고른 범위, 그 기록 수 |
+| `kind` · `channels` | `area`(면) · `line`(선), 채널 이름 순 |
+| `records[]` | 표본(`shape.WALK_SAMPLE` 건) — `raw`(채널별 `path` · `grid` · `stats`) · `norm`(정규화한 `x` · `z` · `path` · `grid`) · `dev`(채널 간 편차) · `centred`(평소를 뺀 편차 = 비교 재료) · `pca`(`values` · `resid` · `coords` · `parts`) · `run_no{skew,pca}` · `ref` · `label` |
+| `baseline` | 범위의 평소 어긋남 — 채널별 `x` · `z` · `line`(+ `grid`) |
+| `pca` | `layout` · `factor` · `median` · `kept` · `explained` · `axes` · `scatter[]`(범위 전체의 첫째 · 둘째 좌표 + `run_no`) |
+| `methods.{skew,pca}` | 표본끼리 `score`(n×n) · (skew 만) `parts{dx,dz,d2,dp}` · `merges[[높이, 남는 자리, 사라지는 자리]]` · `curve[{k, real, silhouette}]` · `labels` · `clusters` · `silhouette` |
+| `runs` · `consts` | 기준이 된 판, 그림에 쓰는 상수 |
+
+기준선과 주성분 투영식은 범위 전체로 냅니다(실제 판과 같음). 묶기(`best_cut`)는 표본끼리 다시 돌리므로 실제 판과 다를 수
+있습니다 — 화면이 둘을 나란히 보입니다. 풀에 기록이 없거나 범위가 없으면 404.
+
 ## `GET /health`
 
 `{ "db": true, "fleet": true, "fleet_url": "http://localhost:8000", "feature_version": 1 }`
