@@ -87,6 +87,17 @@ def test_clusters_group_unlabelled_records_and_read_the_labelled_members(client,
     assert len(full["grid"]) == shape.GRID_N * shape.GRID_N
     assert all(lo <= m <= hi for lo, m, hi in zip(full["lo"], full["path"], full["hi"]) if m is not None)
 
+    # 그림 없이 저장된 판(0009 전) — 처음 읽을 때 구성원에서 내어 채운다(SL-DRAW-2)
+    store = Store(dsn)
+    try:
+        with store._conn() as c:
+            c.execute("DELETE FROM cluster_shapes WHERE run_id = %s", (res["run"]["id"],))
+    finally:
+        store.close()
+    again = client.get("/clusters").json()["clusters"]
+    assert all(c["shape"] and c["shape"]["channels"]["A"]["path"] for c in again)
+    assert client.get("/clusters").json()["clusters"][0]["shape"] == again[0]["shape"]   # 두 번째는 저장된 것
+
     # 이 기록이 든 묶음은 유사 응답에도 실린다
     sim = client.post("/labels/similar", json={"server_id": 2, "name": edges[0], "source": f"{edges[0]}::a"}).json()
     assert sim["cluster"]["cluster_no"] == second["cluster_no"] and sim["cluster"]["size"] == 3

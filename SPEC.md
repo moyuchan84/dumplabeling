@@ -380,7 +380,9 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   the 25th/75th percentile band (`lo` · `hi` — how uniform the cluster is) and the mean cells. Computed in the run and
   stored per cluster (`cluster_shapes`, migration `0009`) so the list and the map do not re-read hundreds of members'
   features. The list and the map get `shape.thin_shape` (mean curve only, `DRAW_THIN` 64 points); `GET /clusters/{no}`
-  gets the whole (computed on the spot for a run from before `0009`), and each member a thinned curve of its own.
+  gets the whole, and each member a thinned curve of its own. A run stored without shapes (before `0009`) has them
+  computed from its members **on first read** and stored (`shapes_of` · `Store.save_cluster_shapes`, `ON CONFLICT DO
+  NOTHING`) — the screen showed 「그림 없음」 on such a run until someone pressed 다시 묶기 (2026-11-02).
   [test: "test_a_clusters_mean_shape_is_the_members_average_with_a_band" · "test_clusters_group_unlabelled_records_and_read_the_labelled_members"]
 
 ## Docs for readers (SL-DOC)

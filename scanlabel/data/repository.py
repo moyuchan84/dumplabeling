@@ -428,6 +428,15 @@ class Store:
         with self._conn() as c:
             return {int(r["cluster_no"]): r["shape"] for r in c.execute(q, args).fetchall()}
 
+    def save_cluster_shapes(self, run_id: int, shapes: dict[int, dict]) -> None:
+        """이미 저장된 판에 평균 그림을 채운다 — 0009 전의 판(SL-DRAW-2). 먼저 쓴 쪽이 이긴다(같은 값이다)."""
+        if not shapes:
+            return
+        with self._conn() as c, c.transaction(), c.cursor() as cur:
+            cur.executemany("INSERT INTO cluster_shapes (run_id, cluster_no, shape) VALUES (%s,%s,%s)"
+                            " ON CONFLICT (run_id, cluster_no) DO NOTHING",
+                            [(run_id, int(no), Jsonb(v)) for no, v in shapes.items()])
+
     def run_map(self, run_id: int, group_key: str) -> Optional[dict]:
         """묶음 범위 하나의 지도 투영식 — 없으면 None (기록이 너무 적었던 범위)."""
         with self._conn() as c:

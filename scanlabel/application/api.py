@@ -343,6 +343,19 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
         """그 기록의 묶음 범위의 지도 투영식 — 결과가 없거나 범위의 기록이 너무 적었으면 None."""
         return store.run_map(int(run["id"]), shape.group_key(*shape.group_of(row))) if run else None
 
+    def shapes_of(run_id: int) -> dict[int, dict]:
+        """그 판의 묶음별 평균 그림. 그림 없이 저장된 판(0009 전)이면 **처음 읽을 때 한 번** 구성원에서 내어
+        채워 둔다 — 「다시 묶기」를 누르지 않아도 목록 · 지도에 그래프가 나오게 (SL-DRAW-2)."""
+        shapes = store.cluster_shapes(run_id)
+        if shapes:
+            return shapes
+        groups: dict[int, list[dict]] = {}
+        for m in store.run_members(run_id, with_features=True):
+            groups.setdefault(int(m["cluster_no"]), []).append(m["features"])
+        shapes = {no: shape.mean_shape(fs) for no, fs in groups.items()}
+        store.save_cluster_shapes(run_id, shapes)
+        return shapes
+
     def run_out(set_name: str, method: str) -> Optional[dict]:
         run = store.latest_run(set_name, method)
         if run is None:
@@ -367,7 +380,7 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
         groups: dict[int, list[dict]] = {}
         for m in store.run_members(run["id"]):
             groups.setdefault(int(m["cluster_no"]), []).append(m)
-        shapes = store.cluster_shapes(run["id"])
+        shapes = shapes_of(int(run["id"]))
         out = []
         # 큰 묶음부터 — 번호는 이어받은 것이라 크기 순이 아니다(SL-CLU-13).
         for no, members in sorted(groups.items(), key=lambda t: (-len(t[1]), t[0])):
@@ -434,7 +447,7 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
         tree = store.tree()
         labels = store.labels_by_record(set_name=set_name)
         member_labels = [labels.get((m["servername"], m["name"], m["source"]), []) for m in members]
-        stored = store.cluster_shapes(int(run["id"]), [cluster_no]).get(cluster_no)
+        stored = shapes_of(int(run["id"])).get(cluster_no)
         return {
             "run_id": int(run["id"]), "method": method, "cluster_no": cluster_no,
             "scan_enum": members[0]["scan_enum"],
@@ -515,7 +528,7 @@ def create_app(dsn: Optional[str] = None, fleet_url: Optional[str] = None, *,
             if no is not None:
                 clusters.setdefault(no, []).append(p)
         cl_out = []
-        shapes = store.cluster_shapes(run_id, clusters.keys())
+        shapes = shapes_of(run_id)
         for no, ps in sorted(clusters.items()):
             cat = shape.cluster_category(
                 [labels.get((m["servername"], m["name"], m["source"]), []) for m in ps], tree)["category"]
