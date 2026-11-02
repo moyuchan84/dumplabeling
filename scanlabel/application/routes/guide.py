@@ -8,7 +8,7 @@ from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
 from ...processing import shape
-from ..web import FLOW, render_guide
+from ..web import DB, FLOW, render_guide
 from .context import Ctx
 
 
@@ -24,7 +24,12 @@ def router(ctx: Ctx) -> APIRouter:
     @r.get("/guide/flow", response_class=HTMLResponse)
     def guide_flow():
         """데이터가 묶음이 되기까지 — 실제 기록으로 단계마다 그려 보는 설명 (SL-DOC-2). 데이터는 /guide/example."""
-        return HTMLResponse(render_guide(FLOW))
+        return HTMLResponse(render_guide(FLOW, "flow"))
+
+    @r.get("/guide/db", response_class=HTMLResponse)
+    def guide_db():
+        """DB 에 무엇이 어떻게 저장되나 — 테이블 · 기록 키 · 모양 요약 · 묶음 · 마이그레이션 (SL-DOC-3). 정적 문서."""
+        return HTMLResponse(render_guide(DB, "db"))
 
     walk_cache: dict[tuple, dict] = {}
     walk_lock = threading.Lock()

@@ -416,6 +416,16 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   the skew run's clusters 101 · 329 · 332 · 333 re-cuts into exactly those four (silhouette 0.504); first answer 1.9 s,
   cached 0.4 s, ~1 MB.
   [test: "test_the_flow_page_walks_real_records_through_every_step" · "test_walkthrough_recuts_a_sample_like_the_real_run"]
+- `SL-DOC-3` **The reader's guide is three tabs; the third says how the data is stored** (2026-11-03, the user asked for
+  the database document to appear with the analysis flow, as a separate tab). `/guide` (reading guide) · `/guide/flow`
+  (analysis flow) · `/guide/db` (`application/web/guide_db.html`: the three blocks — labels, record pool, clusters —
+  the record key, the snapshot JSON, how a run replaces the last and carries its numbers, what is deleted, the migration
+  list) share one tab strip, built by `web.tabs_html`, so a page cannot forget a sibling. The storage page is static;
+  its numbers (`FEATURE_VERSION`, `PATH_N`, `GRID_N`, `CLUSTER_MAX_N`, `CLUSTER_MIN_SIZE`, `MAP_LANDMARKS`) are `{{NAME}}`
+  slots like the other two. `README.db.md` stays the developer's version (column tables, queries); the schema itself
+  stays in `data/migrations/`.
+  [test: "test_the_guide_has_three_tabs_and_the_storage_page_names_every_table" — every table in the migrations must
+  appear on the page]
 
 ## Cluster map (SL-MAP)
 

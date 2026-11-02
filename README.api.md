@@ -337,6 +337,10 @@ RMS) · 어디서(`parts`, (재료, 채널)별 몫) 다른지, `vs.pca_similarit
 기준선과 주성분 투영식은 범위 전체로 냅니다(실제 판과 같음). 묶기(`best_cut`)는 표본끼리 다시 돌리므로 실제 판과 다를 수
 있습니다 — 화면이 둘을 나란히 보입니다. 풀에 기록이 없거나 범위가 없으면 404.
 
+## `GET /guide/db` — 저장 구조
+
+정적 HTML(SL-DOC-3): DB 에 무엇이 어떻게 저장되는지(라벨 · 기록 풀 · 묶음, 기록 키, 요약 JSON, 판 교체, 마이그레이션). `/guide` · `/guide/flow` · `/guide/db` 는 같은 탭 줄을 답니다. 숫자는 `/guide` 와 같이 지금 상수로 채웁니다. 개발자용 상세는 `README.db.md`.
+
 ## `GET /health`
 
 `{ "db": true, "fleet": true, "fleet_url": "http://localhost:8000", "feature_version": 1 }`

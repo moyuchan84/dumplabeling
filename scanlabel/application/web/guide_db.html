@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>저장 구조 — scanlabel</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+/* DB 에 무엇이 어떻게 저장되나 — README.db.md 의 화면판. 숫자 자리(중괄호 둘)는 서버가 shape 상수로 채운다. */
+:root {
+  --bg: #f6f3ee; --plane: #fffdf9; --ink: #2a2622; --ink-2: #5d554c; --line: #ddd4c8;
+  --accent: #b5651d; --accent-soft: #f3e3d1; --b: #3b6ea8; --c: #6a7f3a; --warn: #a2402c; --code-bg: #efe9e0;
+  --f-body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1c1a17; --plane: #25221e; --ink: #ece6dc; --ink-2: #b4aa9c; --line: #3d3832;
+    --accent: #e09a55; --accent-soft: #3a2c1e; --b: #7fb0e6; --c: #a9c26a; --warn: #f0937c; --code-bg: #2e2a25;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1c1a17; --plane: #25221e; --ink: #ece6dc; --ink-2: #b4aa9c; --line: #3d3832;
+  --accent: #e09a55; --accent-soft: #3a2c1e; --b: #7fb0e6; --c: #a9c26a; --warn: #f0937c; --code-bg: #2e2a25;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.75; }
+.wrap { max-width: 880px; margin: 0 auto; padding: 40px 16px 96px; display: flex; flex-direction: column; gap: 40px; }
+h1 { font-size: 28px; line-height: 1.3; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 20px; margin: 0; font-weight: 600; text-wrap: balance; scroll-margin-top: 16px; }
+h3 { font-size: 15.5px; margin: 0; font-weight: 600; }
+p { margin: 0; max-width: 70ch; }
+section { display: flex; flex-direction: column; gap: 14px; }
+.eyebrow { font-family: var(--f-mono); font-size: 11px; font-weight: 600; letter-spacing: .12em; color: var(--accent); }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.tag { font-family: var(--f-mono); font-size: 11px; border: 1px solid var(--line); border-radius: 6px; padding: 0 7px; color: var(--ink-2); }
+.plane { background: var(--plane); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.lead { font-size: 16px; color: var(--ink-2); }
+code { font-family: var(--f-mono); font-size: 12.5px; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+ul, ol { margin: 0; padding-left: 1.3em; display: flex; flex-direction: column; gap: 6px; max-width: 72ch; }
+b.k { color: var(--accent); }
+.q { border-left: 3px solid var(--accent); padding: 2px 0 2px 12px; color: var(--ink-2); }
+.note { border-left: 3px solid var(--warn); padding: 2px 0 2px 12px; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 600px; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+th { font-size: 12px; color: var(--ink-2); font-weight: 600; }
+.flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; }
+.flow > div { flex: 1 1 150px; background: var(--plane); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
+.flow > div b { display: block; color: var(--accent); font-size: 12px; font-family: var(--f-mono); }
+figure { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+figcaption { font-size: 13px; color: var(--ink-2); }
+svg { max-width: 100%; height: auto; }
+svg text { fill: var(--ink); font-family: var(--f-body); font-size: 12px; }
+svg .faint { fill: var(--ink-2); }
+nav.toc { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 14px; }
+nav.toc a, a { color: var(--accent); }
+
+.er .bx { fill: var(--plane); stroke: var(--line); stroke-width: 1.2; }
+.er .g1 { stroke: var(--accent); } .er .g2 { stroke: var(--b); } .er .g3 { stroke: var(--c); }
+.er .ln { stroke: var(--ink-2); stroke-width: 1.2; fill: none; } .er .dash { stroke-dasharray: 5 4; }
+.er .mono { font-family: var(--f-mono); font-size: 12px; font-weight: 600; }
+.er .sub { fill: var(--ink-2); font-size: 11px; }
+.er .zone { fill: none; stroke: var(--line); stroke-dasharray: 2 4; }
+pre { margin: 0; background: var(--code-bg); border-radius: 8px; padding: 10px 12px; overflow-x: auto; font-family: var(--f-mono); font-size: 12.5px; line-height: 1.6; }
+{{TABS_CSS}}
+</style>
+</head>
+<body>
+{{TABS}}
+<div class="wrap">
+
+<header style="display:flex;flex-direction:column;gap:12px">
+  <span class="eyebrow">scanlabel · 읽는 법 · 저장 구조</span>
+  <h1>DB 에 무엇이 어떻게 저장되나</h1>
+  <p class="lead">scanlabel 은 자기 전용 PostgreSQL 에 <b>사람이 정한 것(라벨)</b>, <b>본 기록의 모양 요약(기록 풀)</b>, <b>그것으로 계산한 묶음</b>을 나눠 남깁니다. 라벨은 잃으면 안 되고, 풀과 묶음은 언제든 다시 만들 수 있습니다.</p>
+  <nav class="toc" aria-label="차례">
+    <a href="#map">1 한눈에</a><a href="#key">2 기록의 키</a><a href="#labels">3 라벨</a><a href="#pool">4 기록 풀</a>
+    <a href="#snap">5 모양 요약</a><a href="#clusters">6 묶음</a><a href="#life">7 지워짐 · 갱신</a><a href="#mig">8 스키마 바꾸는 법</a>
+  </nav>
+  <ul>
+    <li>fleet(ftpmodule)의 DB 는 읽지 않습니다. fleet 의 값은 HTTP 로 받아 <b>사본</b>(<code>meta</code> · <code>features</code>)으로만 남깁니다.</li>
+    <li>사람이 읽는 시각은 모두 KST ISO 문자열(<code>2026-11-03T06:58:39+09:00</code>)입니다.</li>
+    <li>컬럼의 정본은 <code>scanlabel/data/migrations/*.sql</code> 이고, 이 페이지는 그것을 읽는 지도입니다.</li>
+  </ul>
+</header>
+
+<section id="map">
+  <div class="head"><h2>1 한눈에 — 세 덩어리</h2><span class="tag">테이블 12개</span></div>
+  <figure class="er">
+    <svg viewBox="0 0 880 430" role="img" aria-label="테이블 관계도: 라벨, 기록 풀, 묶음 세 덩어리">
+      <rect class="zone" x="4" y="4" width="252" height="420" rx="12"/><text class="sub" x="16" y="22">① 라벨 — 사람이 정한 것</text>
+      <rect class="zone" x="290" y="4" width="270" height="420" rx="12"/><text class="sub" x="302" y="22">② 기록 풀 — 본 기록 전부</text>
+      <rect class="zone" x="594" y="4" width="282" height="420" rx="12"/><text class="sub" x="606" y="22">③ 묶음 — 계산한 결과</text>
+
+      <rect class="bx g1" x="20" y="48" width="220" height="86" rx="8"/><text class="mono" x="32" y="70">label_defs</text>
+      <text x="32" y="90">분류 트리 (대 › 중 › 소)</text><text class="sub" x="32" y="108">parent_id 로 자기를 가리킴</text><text class="sub" x="32" y="124">지우지 않고 retired</text>
+      <rect class="bx g1" x="20" y="214" width="220" height="110" rx="8"/><text class="mono" x="32" y="236">scan_labels</text>
+      <text x="32" y="256">기록에 붙인 라벨</text><text class="sub" x="32" y="274">label_ids[] · features 사본</text><text class="sub" x="32" y="290">비우면 행 삭제</text>
+
+      <rect class="bx g2" x="306" y="150" width="238" height="124" rx="8"/><text class="mono" x="318" y="172">scan_records</text>
+      <text x="318" y="192">본 기록 한 건 = 한 행</text><text class="sub" x="318" y="210">features · meta · seq</text><text class="sub" x="318" y="226">scan_enum · chuck_id · sensor_id</text><text class="sub" x="318" y="242">라벨 여부와 무관</text>
+      <rect class="bx g2" x="306" y="330" width="238" height="64" rx="8"/><text class="mono" x="318" y="352">index_cursors</text><text class="sub" x="318" y="372">jobs index 가 읽은 자리</text>
+
+      <rect class="bx g3" x="610" y="40" width="252" height="70" rx="8"/><text class="mono" x="622" y="62">cluster_runs</text><text class="sub" x="622" y="82">계산 한 번 · (set, 잣대)마다 최신 한 판</text><text class="sub" x="622" y="98">pool_seq · next_no · changes</text>
+      <rect class="bx g3" x="610" y="140" width="252" height="52" rx="8"/><text class="mono" x="622" y="162">cluster_members</text><text class="sub" x="622" y="180">묶음에 든 기록 · cluster_no · score</text>
+      <rect class="bx g3" x="610" y="208" width="252" height="52" rx="8"/><text class="mono" x="622" y="230">cluster_points</text><text class="sub" x="622" y="248">지도 2D 자리 x y (묶이지 않은 것 포함)</text>
+      <rect class="bx g3" x="610" y="276" width="252" height="52" rx="8"/><text class="mono" x="622" y="298">cluster_maps</text><text class="sub" x="622" y="316">범위별 투영식 (새 기록도 지도에 놓기)</text>
+      <rect class="bx g3" x="610" y="344" width="252" height="52" rx="8"/><text class="mono" x="622" y="366">cluster_shapes</text><text class="sub" x="622" y="384">묶음의 평균 그림</text>
+
+      <path class="ln" d="M240 91 H256 V70 H240"/><text class="sub" x="150" y="152">parent_id</text>
+      <path class="ln dash" d="M130 134 V214"/><text class="sub" x="136" y="178">label_ids[] (FK 아님)</text>
+      <path class="ln dash" d="M240 270 H306"/><text class="sub" x="244" y="262">같은 키</text>
+      <path class="ln" d="M544 190 H570 V166 H610"/><path class="ln" d="M570 190 V234 H610"/><text class="sub" x="548" y="180">record_id</text>
+      <path class="ln" d="M600 75 V366"/><path class="ln" d="M600 75 H610"/><path class="ln" d="M600 166 H610"/><path class="ln" d="M600 234 H610"/><path class="ln" d="M600 302 H610"/><path class="ln" d="M600 370 H610"/>
+      <text class="sub" x="552" y="410" transform="translate(0,0)">run_id → cluster_runs (삭제하면 함께 삭제)</text>
+    </svg>
+    <figcaption>실선 = 외래키. 점선 = 같은 값으로 이어질 뿐 외래키가 아님. 라벨은 하나의 <code>label_ids</code> 배열로 트리를 가리키고, <code>scan_labels</code> 와 <code>scan_records</code> 는 같은 기록 키로 만납니다.</figcaption>
+  </figure>
+  <div class="grid">
+    <div class="plane"><h3>① 라벨</h3><p>사람의 판단. <b>잃으면 안 됩니다.</b> <code>label_defs</code> · <code>scan_labels</code></p></div>
+    <div class="plane"><h3>② 기록 풀</h3><p>본 기록의 모양 요약. fleet 캐시에서 다시 읽어 복구할 수 있습니다(<code>jobs refeature</code>).</p></div>
+    <div class="plane"><h3>③ 묶음</h3><p>풀에서 계산한 결과. 다음 판이 저장되면 옛 판은 교체됩니다 — 언제든 다시 계산.</p></div>
+  </div>
+</section>
+
+<section id="key">
+  <div class="head"><h2>2 기록의 키 — 기록 한 건을 부르는 이름</h2></div>
+  <div class="plane scroll"><table>
+    <tr><th>값</th><th>뜻</th></tr>
+    <tr><td><code>servername</code></td><td>장비 정체성(fleet 의 안정 키). <code>server_id</code> 는 fleet 쪽 번호라 바뀔 수 있어 키가 아니라 링크용 사본입니다</td></tr>
+    <tr><td><code>set_name</code></td><td>파일 묶음 종류, 지금은 <code>dump</code></td></tr>
+    <tr><td><code>name</code></td><td>파일 이름</td></tr>
+    <tr><td><code>source</code></td><td>파일 안의 기록 식별자 <code>"&lt;tdf&gt;::&lt;dd&gt;"</code></td></tr>
+  </table></div>
+  <p><code>scan_labels</code> 와 <code>scan_records</code> 둘 다 이 네 값이 유일합니다. 같은 기록은 두 테이블에 같은 키로 한 행씩 있고, 묶음 쪽 테이블은 <code>scan_records.id</code> 로 가리킵니다.</p>
+</section>
+
+<section id="labels">
+  <div class="head"><h2>3 라벨</h2><span class="tag">label_defs · scan_labels</span></div>
+  <div class="grid">
+    <div class="plane">
+      <h3><code>label_defs</code> — 분류 트리</h3>
+      <ul>
+        <li>대분류 › 중분류 › 소분류 <b>3단계 고정</b>(<code>level</code> 1·2·3). 한 테이블이 <code>parent_id</code> 로 자기를 가리킵니다.</li>
+        <li>같은 부모 아래에서만 이름이 유일(대소문자 · 공백 무시) — 「피크」가 서로 다른 대분류 아래에 각각 있을 수 있습니다.</li>
+        <li>지우지 않고 <code>retired</code> 로 은퇴시킵니다. <code>case_id</code> 는 fleet 사례를 가리키는 soft 참조(조인하지 않음).</li>
+        <li>실제 분류표 <b>ID-0603</b> 은 마이그레이션 0003 이 넣습니다.</li>
+      </ul>
+    </div>
+    <div class="plane">
+      <h3><code>scan_labels</code> — 기록에 붙인 라벨</h3>
+      <ul>
+        <li><code>label_ids bigint[]</code> — 하나 이상, <b>어느 단계든</b>. 배열이라 외래키가 아니고, 저장 전에 서버가 검사합니다.</li>
+        <li><code>features</code> 를 <b>복사해 둡니다</b> — 원본이 fleet 캐시에서 사라져도 닮은 기록 찾기가 됩니다.</li>
+        <li>라벨을 비우면 행을 <b>삭제</b>합니다. 저장은 항상 fleet 에서 새로 읽어 그 시점의 세대를 남깁니다.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="pool">
+  <div class="head"><h2>4 기록 풀</h2><span class="tag">scan_records · index_cursors</span></div>
+  <ul>
+    <li>scanlabel 이 <b>본</b> 기록마다 모양 요약을 한 벌 둡니다. 라벨이 없어도 들어옵니다. <b>묶음은 이 테이블만 읽습니다.</b></li>
+    <li>풀에 들어오는 길은 셋: 화면에서 파일을 열 때 · 라벨 저장 · <code>jobs index</code>(fleet <code>/generations</code> 를 따라가며, 캐시만 읽음).</li>
+    <li><code>scan_enum</code> · <code>chuck_id</code> · <code>sensor_id</code> 세 열이 <b>묶음 범위</b>입니다. 범위마다 따로 묶습니다.</li>
+    <li><code>index_cursors</code> 는 <code>jobs index</code> 가 어디까지 읽었는지(<code>after_id</code>). 도중에 실패해도 처리한 데까지는 남깁니다.</li>
+  </ul>
+  <div class="plane">
+    <h3><code>seq</code> — 「묶음이 낡았다」를 아는 법</h3>
+    <p>같은 파일을 다시 열어도 <b>세대 · 요약 판 · 스캔 종류 · 척 · 센서</b>가 그대로면 행을 쓰지 않습니다. 바뀔 때만 새 <code>seq</code> 를 받습니다. 묶음 판은 묶을 때의 최대 <code>seq</code> 를 <code>pool_seq</code> 로 기억하므로, 풀에 그보다 큰 <code>seq</code> 가 있으면 「낡았다」고 화면이 말합니다. 열기만 해서는 낡아지지 않습니다.</p>
+  </div>
+</section>
+
+<section id="snap">
+  <div class="head"><h2>5 모양 요약 <code>features</code></h2><span class="tag">jsonb</span></div>
+  <p><code>scan_labels</code> 와 <code>scan_records</code> 의 <code>features</code> 는 <b>같은 모양</b>입니다. <b>정규화 전</b> 값만 남기고, 비교용 정규화는 읽을 때 합니다 — 그래서 비교 방식을 바꿔도 원본 없이 요약만으로 다시 계산됩니다.</p>
+<pre>{
+  "version": {{FEATURE_VERSION}},                        // 요약 모양이 바뀌면 올린다 (jobs refeature)
+  "channels": {
+    "tr": {                                // 채널 이름은 dump 의 value 키 그대로
+      "path":  [ ... {{PATH_N}}개 ... ],           // 측정 순서 곡선을 {{PATH_N}}점으로 줄인 것
+      "grid":  [ ... {{GRID_N}}×{{GRID_N}} 칸, 빈 칸은 null ... ],   // 선 스캔이면 null
+      "stats": { "n": .., "min": .., "max": .., "mean": .., "std": .. }
+    }                                      // txh, tyh … 채널마다
+  }
+}</pre>
+  <p class="q"><code>feature_version</code> 이 코드의 값과 다르면 낡은 요약입니다. 배포 뒤 <code>jobs refeature</code> 가 라벨된 기록과 풀을 새 판으로 바꾸고, 이어서 <code>jobs cluster</code> 를 돌립니다.</p>
+</section>
+
+<section id="clusters">
+  <div class="head"><h2>6 묶음</h2><span class="tag">cluster_*</span></div>
+  <ul>
+    <li>묶기는 <b>(스캔 종류, 척, 센서)마다 따로</b> 합니다. 한 범위에서 라벨된 기록 전부 + 라벨 없는 최근 {{CLUSTER_MAX_N}}건을 묶고, {{CLUSTER_MIN_SIZE}}건 미만 무리는 묶음이 아니라 「묶이지 않음」입니다.</li>
+    <li>잣대 둘 — <code>skew</code>(채널 간 편차) · <code>pca</code>(주성분). 같은 풀을 <b>두 잣대로 따로 묶어</b> 각각 저장하고, 화면이 골라 봅니다.</li>
+  </ul>
+  <div class="plane scroll"><table>
+    <tr><th>테이블</th><th>키</th><th>담는 것</th></tr>
+    <tr><td><code>cluster_runs</code></td><td>id</td><td>계산 한 번. <code>(set_name, method)</code>마다 <b>최신 한 판</b>. 기록 수 · 묶음 수 · 묶이지 않은 수 · <code>pool_seq</code> · <code>next_no</code> · <code>changes</code>(지난 판과의 차이)</td></tr>
+    <tr><td><code>cluster_members</code></td><td>run_id, record_id</td><td>묶음에 든 기록. <code>cluster_no</code> · 대표와의 유사도 <code>score</code> · <code>representative</code>. <b>묶이지 않은 기록은 행이 없음</b></td></tr>
+    <tr><td><code>cluster_points</code></td><td>run_id, record_id</td><td>묶어 본 기록 <b>전부</b>의 지도 2D 자리 <code>x</code> <code>y</code></td></tr>
+    <tr><td><code>cluster_maps</code></td><td>run_id, group_key</td><td>범위 하나의 투영식(jsonb). 이것이 있어야 그 판에 없던 새 기록도 같은 지도에 놓습니다. 기준점 {{MAP_LANDMARKS}}개(skew) 또는 주성분 모델(pca)</td></tr>
+    <tr><td><code>cluster_shapes</code></td><td>run_id, cluster_no</td><td>묶음의 평균 그림(평균 곡선 · 25–75 백분위 띠 · 칸 평균) — 목록 · 지도가 구성원을 매번 읽지 않게</td></tr>
+  </table></div>
+  <ul>
+    <li>「라벨됐나」는 컬럼이 아니라 <code>scan_labels</code> 와 맞춰 그때그때 계산합니다. 라벨이 바뀌어도 묶음을 다시 쓰지 않습니다.</li>
+    <li><b>번호가 이어집니다.</b> 새 판을 저장할 때 같은 <code>(set_name, method)</code> 의 옛 판을 지우기 전에 옛 번호를 읽어, 닮음이 그대로인 묶음은 지난 번호를 이어받습니다. 번호는 재사용하지 않으므로 판마다 <code>next_no</code> 를 남깁니다.</li>
+    <li>자식 테이블은 모두 <code>run_id → cluster_runs</code> 외래키(삭제 시 함께 삭제)입니다.</li>
+  </ul>
+</section>
+
+<section id="life">
+  <div class="head"><h2>7 값이 흐르는 길 · 지워지는 것</h2></div>
+<pre>fleet (HTTP, 캐시만)             scanlabel DB
+dump 파일의 기록 ─ 모양 요약 ──▶ scan_records   (파일 열기 · jobs index · 라벨 저장)
+사람이 라벨 저장 ──────────────▶ scan_labels    (같은 요약 복사 + label_ids[])
+jobs cluster / 「다시 묶기」 ◀─── scan_records 를 읽어 범위마다 묶음
+        └▶ cluster_runs ▶ cluster_members · cluster_points · cluster_maps · cluster_shapes</pre>
+  <div class="plane scroll"><table>
+    <tr><th>대상</th><th>규칙</th></tr>
+    <tr><td><code>label_defs</code></td><td>지우지 않음 — <code>retired</code> 로 은퇴</td></tr>
+    <tr><td><code>scan_labels</code></td><td>라벨을 비우면 그 행 삭제</td></tr>
+    <tr><td><code>scan_records</code></td><td>지우지 않음. 같은 키는 갱신(변할 때만)</td></tr>
+    <tr><td><code>cluster_*</code></td><td>같은 <code>(set_name, method)</code> 의 다음 판이 저장될 때 옛 판이 통째로 삭제</td></tr>
+  </table></div>
+</section>
+
+<section id="mig">
+  <div class="head"><h2>8 스키마 바꾸는 법</h2><span class="tag">migrations</span></div>
+  <ul>
+    <li>새 파일 <code>data/migrations/NNNN_*.sql</code>. <b>적용된 파일은 절대 고치지 않습니다</b> — 파일 체크섬이 장부와 다르면 에러입니다.</li>
+    <li>서버는 시작할 때 스키마 버전을 확인하고 다르면 <b>시작을 거부</b>합니다. 적용은 <code>python -m scanlabel.data.migrate up</code>.</li>
+  </ul>
+  <div class="plane scroll"><table>
+    <tr><th>번호</th><th>내용</th></tr>
+    <tr><td>0001</td><td><code>label_defs</code> · <code>scan_labels</code></td></tr>
+    <tr><td>0002</td><td><code>scan_records</code>(+<code>seq</code>) · <code>index_cursors</code> · <code>cluster_runs</code> · <code>cluster_members</code></td></tr>
+    <tr><td>0003</td><td>분류표 ID-0603 을 트리로 입력(데이터 마이그레이션, 멱등)</td></tr>
+    <tr><td>0004</td><td><code>cluster_points</code> · 투영식 — 묶음 지도</td></tr>
+    <tr><td>0005 · 0006</td><td>묶는 범위에 센서 · 척 추가</td></tr>
+    <tr><td>0007</td><td>잣대 둘(<code>method</code>) · 투영식을 <code>cluster_maps</code> 로 분리</td></tr>
+    <tr><td>0008</td><td>이어서 묶기(<code>next_no</code> · <code>changes</code>)</td></tr>
+    <tr><td>0009</td><td><code>cluster_shapes</code> · 문턱 없는 묶기</td></tr>
+  </table></div>
+  <p class="q">개발자용 상세(컬럼 표 · 조회 SQL 예시)는 저장소의 <code>README.db.md</code> 에 있습니다. 데이터는 직접 고치지 말고, 라벨은 화면 · API 로, 풀과 묶음은 <code>jobs</code> 로, 스키마는 마이그레이션으로만 바꿉니다.</p>
+</section>
+
+</div>
+</body>
+</html>
