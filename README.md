@@ -6,7 +6,7 @@ dump 기록(스캔 한 건)에 **대분류 › 중분류 › 소분류 라벨**�
 
 - fleet(ftpmodule)의 공개 HTTP API 를 **캐시로만** 읽습니다 — FTP 를 일으키지 않고, fleet DB 를 읽지 않습니다.
 - 화면은 poc_viewer 의 Dump → 「사례」 패널 → 「이 기록 라벨」 탭입니다.
-- 규칙과 결정: `SPEC.md` · 호출 계약: `README.api.md` · 작업 규칙: `CLAUDE.md`.
+- 규칙과 결정: `SPEC.md` · 호출 계약: `README.api.md` · 저장 구조: `README.db.md` · 작업 규칙: `CLAUDE.md`.
 
 ## 실행 (이 PC)
 

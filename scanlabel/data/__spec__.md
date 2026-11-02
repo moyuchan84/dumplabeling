@@ -9,6 +9,8 @@ never `connectors` (a stored row does not know where it came from) and never `ap
 
 ## Table map
 
+A reader-friendly walkthrough in Korean (columns, the snapshot's JSON, lifecycle, queries) is `README.db.md`; this table and the migrations stay the source of truth.
+
 | Table | Holds | Written by | Goes away |
 |---|---|---|---|
 | `label_defs` | the three-level label tree (`SL-TREE`) | `/label-defs`, `jobs seed-labels`, migration `0003` | never deleted — `retired` |

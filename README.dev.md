@@ -97,6 +97,7 @@ $env:SCANLABEL_TEST_DSN = 'postgresql://postgres@127.0.0.1:5433/scanlabel_test'
 |---|---|---|
 | `README.md` | 운영자 · 사용자 — 실행 · 라벨 넣기 · 기록 풀 · 측정 | 한국어 |
 | `README.api.md` | 호출자 — HTTP 계약 | 한국어 |
+| `README.db.md` | 개발자 · 운영자 — DB 에 무엇이 어떻게 저장되나 (테이블 · 스냅샷 · 묶음 · 마이그레이션) | 한국어 |
 | `README.dev.md` | 개발자 — 구조 · 선택 테스트 지도 (이 문서) | 한국어 |
 | `SPEC.md` | 요구사항 · 불변식 (`SL-*` ID) | 영문 |
 | `CLAUDE.md` | 작업 규칙 · 영역 지도 · 변경 라우팅 | 영문 |
