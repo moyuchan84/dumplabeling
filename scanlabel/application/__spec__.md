@@ -19,7 +19,14 @@ into `connectors/` or `data/`.
   `/generations` cursor, cache only, `SL-POOL-2`) · `run_clusters` (cluster + map the pool, store the run).
 - They take a `Store` / `Fleet` as arguments — nothing here constructs a connection, so a test hands in a fake.
 
-### `api.py` — `create_app(dsn, fleet_url)`
+### `api.py` + `routes/` + `web/` — `create_app(dsn, fleet_url)`
+- `api.py` only assembles: it builds `Store` / `Fleet` / `FileCache` into a `routes.context.Ctx`, installs the error handlers
+  and includes one `APIRouter` per file in `routes/` — `system` · `taxonomy` · `labels` · `clusters` · `records` · `guide`.
+  `schemas.py` holds request bodies, `serializers.py` response shaping (rounding, label paths — no judgement), and
+  `context.py` the lookups several routers share (`record_cluster`, `shapes_of`, `current_run`, `target_features`).
+  The re-run job state lives in `routes/clusters.py`, per app instance.
+- `web/` holds the HTML the server hands out (`guide.html`, `guide_flow.html`) and `render_guide` / `guide_values`,
+  which fill `{{NAME}}` slots from `shape` constants.
 - Routes: `/health` · `/guide` (the reader's guide, `SL-DOC-1`) · `/guide/flow` + `/guide/example` (the interactive walk on real records, `SL-DOC-2`) · `/label-defs` · `/labels` (+ `/labels/similar`, `/labels/by-case/{id}`) · `/clusters` (+
   `/run`, `/map`, `/{no}/apply`) · `/records/{id}`. The caller contract is `README.api.md`; change a route, its
   response or an error there in the same change.

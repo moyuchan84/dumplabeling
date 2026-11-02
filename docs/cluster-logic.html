@@ -258,7 +258,7 @@ sequenceDiagram
       <thead><tr><th>곳</th><th>변경</th></tr></thead>
       <tbody>
         <tr><td>scanlabel <code>migrations/0005</code></td><td><code>scan_records · cluster_members · cluster_points</code> 에 <code>sensor_id</code> 열. 기존 풀 행은 <code>meta.sensor_id</code> 에서 채움</td></tr>
-        <tr><td><code>processing/shape.py</code></td><td><code>cluster()</code> 가 (스캔 종류, 센서)로 나눔 · <code>group_key()</code> · <code>profiles()</code> 와 재료별 정규화(<code>similarity</code>), <code>normalized_profiles()</code></td></tr>
+        <tr><td><code>processing/shape/</code></td><td><code>cluster()</code> 가 (스캔 종류, 센서)로 나눔 · <code>group_key()</code> · <code>profiles()</code> 와 재료별 정규화(<code>similarity</code>), <code>normalized_profiles()</code></td></tr>
         <tr><td><code>data/repository.py</code> · <code>usecases.py</code></td><td>풀 읽기·800건 상한·지도 투영을 범위 단위로</td></tr>
         <tr><td><code>application/api.py</code></td><td><code>/clusters/map?sensor_id=</code>, 응답에 <code>sensor_id · target_sensor</code>, <code>kinds</code> 에 센서 · 곡선 필드 <code>paths/path</code> → <code>profiles/profile</code>(<code>{x, z}</code>, 기록 상세는 <code>grid</code> 까지), 점수에 <code>dx · dz</code></td></tr>
         <tr><td>poc_viewer <code>ClusterBrowser.tsx</code> · <code>core/labels.ts</code></td><td>콤보박스, 범위 이름, 기록이 바뀌면 범위 초기화 · X · Z 단면을 한 장씩 · 기록 상세의 칸 그림 (<code>LabelForm.tsx</code> 의 유사 기록도)</td></tr>

@@ -281,7 +281,7 @@ footer{margin-top:50px;padding-top:16px;border-top:1px solid var(--line);color:v
     <tr><td>장비 원본 파일 · 해석 결과(<code>name@sig</code>)</td><td><span class="tag t-fleet">fleet</span></td><td>장비에서 사라져도 남음. 지우는 건 운영자 <code>prune</code> 뿐</td></tr>
     <tr><td>사례 <code>acs_case</code> · 파일 분석 <code>acs_analysis</code></td><td><span class="tag t-fleet">fleet</span></td><td>scanlabel 은 <code>case_id</code> 만 소프트 참조 (DB 간 조인 없음, <code>SL-CASE-3</code>)</td></tr>
     <tr><td>라벨 트리 · 기록 라벨 · 특징 스냅샷 · 기록 풀 · 묶음 결과</td><td><span class="tag t-label">scanlabel</span></td><td>fleet 캐시가 정리돼도 라벨은 살아남도록 특징 스냅샷을 같이 저장 (<code>SL-LBL-6</code>)</td></tr>
-    <tr><td>점수 · 확실 여부 · 묶음 합의 · 지도 좌표</td><td><span class="tag t-label">scanlabel</span></td><td>문턱값은 <code>processing/shape.py</code> 상수 한 곳에만</td></tr>
+    <tr><td>점수 · 확실 여부 · 묶음 합의 · 지도 좌표</td><td><span class="tag t-label">scanlabel</span></td><td>문턱값은 <code>processing/shape/</code> 상수 한 곳에만</td></tr>
     <tr><td>입력 UI · 초안 · 표시 · 폴링 주기</td><td><span class="tag t-viewer">poc_viewer</span></td><td>점수·문턱을 화면에 두지 않는다 (<code>DUMP-SIM-1</code>)</td></tr>
   </table></div>
 </section>
@@ -452,7 +452,7 @@ footer{margin-top:50px;padding-top:16px;border-top:1px solid var(--line);color:v
 
 <!-- 6 ───────────────────────────── -->
 <section id="logic">
-  <h2><span class="no">06</span>판단 로직 (<code>processing/shape.py</code>)</h2>
+  <h2><span class="no">06</span>판단 로직 (<code>processing/shape/</code>)</h2>
   <p class="sec-lead">"비슷한 모양은 같은 원인을 공유한다"는 <b>가설</b> 위에서, 학습 없이 최근접 비교로 동작합니다. 모든 문턱값·가중치는 이 파일의 상수 한 곳에만 있습니다 (<code>SL-SUG-4</code>).</p>
 
   <h3>6.1 파이프라인</h3>
@@ -624,9 +624,9 @@ corr = z-score(offset·gain 제거) 후 피어슨</pre>
   <h3>변경 → 어디를 고치나</h3>
   <div class="tw"><table>
     <tr><th>변경</th><th>코드 · 문서 · 테스트</th></tr>
-    <tr><td>임계값/가중치/유사도 규칙</td><td><code>shape.py</code> 상수 · <code>SPEC.md</code> 한 줄 · <code>test_shape.py</code> — <b><code>jobs eval</code> 수치를 커밋 메시지에</b></td></tr>
-    <tr><td>스냅샷 모양</td><td><code>shape.py</code> + <code>FEATURE_VERSION</code>↑ · 배포 후 <code>jobs refeature</code></td></tr>
-    <tr><td>엔드포인트</td><td><code>api.py</code>(+<code>usecases.py</code>) · <code>README.api.md</code> 같은 변경에서 · <code>test_api.py</code></td></tr>
+    <tr><td>임계값/가중치/유사도 규칙</td><td><code>processing/shape/constants.py</code> 상수 · <code>SPEC.md</code> 한 줄 · <code>test_shape.py</code> — <b><code>jobs eval</code> 수치를 커밋 메시지에</b></td></tr>
+    <tr><td>스냅샷 모양</td><td><code>processing/shape/features.py</code> + <code>FEATURE_VERSION</code>↑ · 배포 후 <code>jobs refeature</code></td></tr>
+    <tr><td>엔드포인트</td><td><code>application/routes/</code>(+<code>usecases.py</code>) · <code>README.api.md</code> 같은 변경에서 · <code>test_api.py</code></td></tr>
     <tr><td>스키마</td><td>새 <code>migrations/NNNN_*.sql</code> + <code>Store</code> · <code>data/__spec__.md</code> 표</td></tr>
     <tr><td>fleet 에 새로 필요한 것</td><td><b>fleet 에 먼저 요청</b>(<code>SL-FLEET-1</code>) → 그다음 <code>connectors/fleet.py</code> 만</td></tr>
   </table></div>

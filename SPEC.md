@@ -146,7 +146,7 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   sure level — 「대분류는 확실, 소분류는 갈림」 is said as such.
   [test: "test_a_split_leaf_stops_the_suggestion_at_the_middle_level" · "test_nothing_is_suggested_below_an_unsure_level"]
 - `SL-SUG-3` Below the threshold nothing is suggested. A forced suggestion would read as evidence.
-- `SL-SUG-4` Thresholds and weights are **heuristics** in `processing/shape.py` constants, and only there. They are
+- `SL-SUG-4` Thresholds and weights are **heuristics** in `processing/shape/` constants, and only there. They are
   tuned by `SL-EVAL`, not by feel.
 - `SL-SUG-5` Without a `source`, `/labels/similar` answers one suggestion per record of the file — what the
   record list marks.
@@ -233,7 +233,7 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 - `SL-CLU-6` `/labels/similar` (with a `source`) answers `cluster`: the cluster the record belongs to in the latest
   run, with its category — the screen says 「이 기록은 묶음 #n 에 든다」 without a second call.
 - `SL-CLU-7` Constants (`CLUSTER_K_MAX`, `CLUSTER_MIN_SIZE`, `CLUSTER_AGREE`, `CLUSTER_MAX_N`) are heuristics in
-  `processing/shape.py`, like `SL-SUG-4`, and the run stores `min_size`; `cluster_runs.threshold` holds `CLUSTER_MIN` for
+  `processing/shape/`, like `SL-SUG-4`, and the run stores `min_size`; `cluster_runs.threshold` holds `CLUSTER_MIN` for
   runs before migration `0009` and is null after.
 - `SL-CLU-8` `POST /clusters/run` **starts** the run in a background thread and answers 202 with the job; `GET
   /clusters` carries `job` (`running` · `done` · `failed` + reason). A second request while one runs gets the running
@@ -391,16 +391,16 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
   그래프 데이터를 보면 이해가 안되는데 어떤 방식 접근, 어떤 데이터들을 가져와서 해당 결론에 도출하는지 쉽고 이해할수
   있게 가이드 하는 문서도 해당 메뉴 링크에 있으면 좋을거같아」 — reviewers cannot follow the graphs; a guide to the
   approach, the data and how a conclusion is reached should hang off that menu). `GET /guide` serves
-  `application/guide.html` — Korean, for reviewers: what is read from a dump record, the three summaries, both
+  `application/web/guide.html` — Korean, for reviewers: what is read from a dump record, the three summaries, both
   measures, the grouping, the map, and every block of the record detail with whether it feeds a score. Every threshold
-  and weight in it is a `{{NAME}}` filled from `shape` at request time (`api.guide_values`), so the page cannot quote a
+  and weight in it is a `{{NAME}}` filled from `shape` at request time (`web.guide_values`), so the page cannot quote a
   stale number. Sections carry stable anchors (`#skew` · `#pca` · `#path` · `#detail` …) that poc_viewer links to
   (`DUMP-CLU-18`). [test: "test_the_guide_is_served_with_the_numbers_the_code_uses"]
   `docs/cluster-logic.html` stays the developer's walk through the code (request flow, tables), not the reader's guide.
 - `SL-DOC-2` **The flow is shown on real records** (2026-11-02, the user: 「어떤 데이터로 pca를 하는지, 어떤 preprocessing 후
   어떻게 데이터롤 clustering 하는ㄴ지가 눈에 잘 안들어오는데 다이어그램, 인터렉티브, 실제 예시 데이터르 ㄹ통해서 데이터 변화,
   흐름등에 대해서 설명을 다시 해줘서 누가든던지 애해할수있게」 — prose and formulas were not enough; show the data changing,
-  step by step, on real examples). `GET /guide/flow` serves `application/guide_flow.html`, an interactive page (inline SVG,
+  step by step, on real examples). `GET /guide/flow` serves `application/web/guide_flow.html`, an interactive page (inline SVG,
   no script from a CDN) linked from the guide's head and §11: 0 the flow diagram with the range's real sizes · 1 raw →
   snapshot · 2 per-channel z-score · 3 grid → X/Z profiles · 4 channel skew · 5 minus the range's median · 6 the pair score
   recomputed from the drawn values beside the server's · 7 the PCA row (layout, median, weights, explained variance, the
@@ -482,7 +482,7 @@ Caller contract: `README.api.md`. Working rules: `CLAUDE.md`.
 - `SL-X-4` **Free-text tags** — see `SL-TREE-2`.
 - `SL-X-5` **pgvector** — tens to thousands of labels are compared exhaustively in Python in tens of ms;
   an extension is one more thing a closed-network PostgreSQL has to carry.
-- `SL-X-6` **numpy at the start** — not needed at this size; `processing/shape.py` is the only file that would change
+- `SL-X-6` **numpy at the start** — not needed at this size; `processing/shape/` is the only file that would change
   once it is known to be fetchable. Clustering kept it out too: `math.sumprod` brought 800 records from ≈ 60 s to
   ≈ 6 s (2026-10-15).
 - `SL-X-7` **Clustering on the fly, unstored** — cluster numbers would shift between the list, the detail and a
