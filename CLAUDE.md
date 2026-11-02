@@ -32,7 +32,7 @@ Four areas under `scanlabel/`, dependencies pointing one way (`tests/test_archit
 | A tree rule | `processing/tree.py` (+ the DB `CHECK` in a new migration if it must hold in SQL) · `tests/test_tree.py` |
 | Endpoint / response / error | the owning file in `application/routes/` (+ `usecases.py` when the work is shared) · `README.api.md` in the same change · `tests/test_api.py` |
 | A new job / CLI subcommand | the function in `application/usecases.py` · a thin subcommand in `jobs.py` · `README.md` |
-| Schema | new `data/migrations/NNNN_*.sql` + `Store` methods · `data/__spec__.md` table map · `tests/test_api.py` / `tests/test_cluster.py` |
+| Schema | new `data/migrations/NNNN_*.sql` + `Store` methods · `data/__spec__.md` table map · `README.db.md` (tables, migration list) · `tests/test_api.py` / `tests/test_cluster.py` |
 | A new need from fleet | a request to fleet first (`SL-FLEET-1`); then `connectors/fleet.py` only |
 | A settled decision | `SPEC.md` (repo-wide) or the owning area's `__spec__.md` — Decision / Reason / Rejected / Revisit when / Validation |
 
